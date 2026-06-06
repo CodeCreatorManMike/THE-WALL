@@ -1,25 +1,31 @@
 import type { TextZone } from './variants'
 import { FONT_MAX, TEXT_COLORS } from './constants'
 
-export function wrapText(text: string, perLine: number): string[] {
+// Pixel-accurate character-by-character wrapping using actual measured widths.
+// Much more accurate than estimating from a single character.
+function wrapByMeasure(
+  ctx: CanvasRenderingContext2D,
+  text: string,
+  maxWidth: number
+): string[] {
   const lines: string[] = []
-  let current = ''
-  for (const char of text) {
-    if (current.length >= perLine) {
-      lines.push(current)
-      current = char
+  let line = ''
+  for (const ch of text) {
+    const test = line + ch
+    if (ctx.measureText(test).width > maxWidth && line !== '') {
+      lines.push(line)
+      line = ch
     } else {
-      current += char
+      line = test
     }
   }
-  if (current) lines.push(current)
+  if (line) lines.push(line)
   return lines
 }
 
 // Font never shrinks. Always FONT_MAX (8px at 1x).
-// Uses ctx.measureText for pixel-accurate line width — no estimation.
-// posScale: zone positioning on the displayed note
-// fontScale: font render size (pass getScale() in edit preview)
+// posScale: scale for zone positioning on the displayed note
+// fontScale: scale for font rendering (pass getScale() in edit preview)
 export function renderNoteText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -47,14 +53,11 @@ export function renderNoteText(
   ctx.textBaseline = 'top'
   ctx.imageSmoothingEnabled = false
 
-  // Measure actual character width from the loaded font (Minecraft is monospace)
-  // This is accurate — no estimation, fills the zone correctly
-  const actualCharW = ctx.measureText('M').width || fontSize * 0.5
-  const lineH       = (FONT_MAX + 2) * fs
-  const perLine     = Math.max(1, Math.floor(zoneW / actualCharW))
-  const lines       = wrapText(text, perLine)
+  // Pixel-accurate wrapping: measure each character as it's added to the line
+  const lines = wrapByMeasure(ctx, text, zoneW)
+  const lineH  = (FONT_MAX + 2) * fs
 
-  // Clip strictly to zone
+  // Clip strictly to zone — text stops at zone boundary
   ctx.beginPath()
   ctx.rect(baseX, baseY, zoneW, zoneH)
   ctx.clip()

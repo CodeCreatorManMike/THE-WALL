@@ -1,9 +1,6 @@
-// All note variants with pixel-accurate text zones (1x Aseprite px)
-// RULE: text zone must sit entirely on the LIGHTEST shade (base color) of the note.
-//   - Header stripe rows 0-14 are EXCLUDED (darker shade).
-//   - Body rows 15-47 are the lightest shade.
-//   - Fold/torn irregular areas are also excluded.
-//   - Text zones start at y≥16 (1px padding below header boundary at row 15).
+// All note variants — text zones derived from actual pixel analysis of sprite alpha channels.
+// Rule: zone covers ONLY the lightest shade (body rows 16+), stops at first fold/tear pixel.
+// Zone measurements in 1x Aseprite px. All colour variants share the same shape/zone.
 
 export interface TextZone {
   x: number
@@ -19,45 +16,34 @@ export interface NoteVariant {
   zone: TextZone
 }
 
-// ─── Zone definitions per shape (all in 1x sprite pixels) ────────────────────
+// ─── Pixel-confirmed zones (from row-by-row alpha scan) ─────────────────────
+//
+// v=1  : fully opaque, no fold → max body
+// v=2  : top-right diagonal fold, R starts at row 35 → stop at row 33
+// v=3  : top-right fold smaller, R starts at row 40 → stop at row 38
+// v=4  : top-right fold smallest, R starts at row 43 → stop at row 41
+// v=5  : bottom-left fold, L starts at row 35 → stop at row 33
+// v=6  : bottom-left fold smaller, L starts ~row 38 → stop at row 36
+// v=7  : bottom-left fold smallest, L starts ~row 41 → stop at row 39
+// v=8–14: fully opaque body (no fold detected in body rows) → max body
+// torn  : torn bottom, rows 39+ become irregular → stop at row 37
+// torn_2: torn top, content rows 22–46 clean → start at row 22
 
-// Standard flat note — full light body area
-const Z_STANDARD:    TextZone = { x: 4, y: 16, w: 39, h: 27 }
+// All zones use x=2 for 1px margin from sprite border.
+// Width 43 = sprite width 48 − 2px left margin − 3px right margin.
+// Full body height = rows 16→47 = h:31
 
-// Top-right fold variants — dark triangle eats into top-right
-// The fold triangle at (48,0)→(48,h)→(x,0) must be avoided.
-// Conservative: reduce width to avoid fold, keep y same.
-const Z_FOLD_TR_LG:  TextZone = { x: 4, y: 16, w: 26, h: 27 }  // large fold
-const Z_FOLD_TR_MD:  TextZone = { x: 4, y: 16, w: 30, h: 27 }  // medium fold
-const Z_FOLD_TR_SM:  TextZone = { x: 4, y: 16, w: 33, h: 27 }  // small fold
+const Z_FULL: TextZone       = { x: 2, y: 16, w: 43, h: 31 }   // no fold
+const Z_TR_LG: TextZone      = { x: 2, y: 16, w: 43, h: 18 }   // top-right fold large  (stop at row 33)
+const Z_TR_MD: TextZone      = { x: 2, y: 16, w: 43, h: 23 }   // top-right fold medium (stop at row 38)
+const Z_TR_SM: TextZone      = { x: 2, y: 16, w: 43, h: 26 }   // top-right fold small  (stop at row 41)
+const Z_BL_LG: TextZone      = { x: 2, y: 16, w: 43, h: 18 }   // bottom-left fold large
+const Z_BL_MD: TextZone      = { x: 2, y: 16, w: 43, h: 21 }   // bottom-left fold medium
+const Z_BL_SM: TextZone      = { x: 2, y: 16, w: 43, h: 24 }   // bottom-left fold small
+const Z_TORN_BOT: TextZone   = { x: 2, y: 16, w: 43, h: 22 }   // torn bottom (clean to row 37)
+const Z_TORN_TOP: TextZone   = { x: 2, y: 22, w: 43, h: 24 }   // torn top    (clean from row 22)
 
-// Bottom-right fold — dark area at bottom-right corner
-const Z_FOLD_BR:     TextZone = { x: 4, y: 16, w: 33, h: 20 }
-const Z_FOLD_BR2:    TextZone = { x: 4, y: 16, w: 31, h: 20 }
-
-// Both corners folded
-const Z_FOLD_DUAL:   TextZone = { x: 4, y: 16, w: 28, h: 19 }
-
-// Large top-right curl (page curl style)
-const Z_CURL_TR:     TextZone = { x: 4, y: 18, w: 24, h: 22 }
-
-// Large square fold (top-right quadrant folded)
-const Z_FOLD_SQ_LG:  TextZone = { x: 4, y: 22, w: 23, h: 19 }
-
-// Large top fold (big triangle from top-right)
-const Z_FOLD_TOP_LG: TextZone = { x: 4, y: 20, w: 27, h: 21 }
-
-// Diagonal fold variants
-const Z_DIAG_TR:     TextZone = { x: 4, y: 17, w: 29, h: 24 }
-const Z_DIAG_TR2:    TextZone = { x: 4, y: 18, w: 29, h: 23 }
-const Z_DIAG_LG:     TextZone = { x: 4, y: 22, w: 25, h: 19 }
-
-// Torn edges — body area reduced to avoid irregular torn pixels
-const Z_TORN_BOT:    TextZone = { x: 4, y: 16, w: 39, h: 21 }  // avoid torn bottom
-const Z_TORN_TOP:    TextZone = { x: 4, y: 22, w: 39, h: 21 }  // avoid torn top (push down)
-
-// ─── Build full variant list ──────────────────────────────────────────────────
-function makeVariants(num: string, zone: TextZone): NoteVariant[] {
+function make(num: string, zone: TextZone): NoteVariant[] {
   return [
     { key: `yellow_${num}`, file: `yellow_sticky_note_${num}.png`, color: 'yellow', zone },
     { key: `blue_${num}`,   file: `blue_sticky_note_${num}.png`,   color: 'blue',   zone },
@@ -66,19 +52,19 @@ function makeVariants(num: string, zone: TextZone): NoteVariant[] {
 }
 
 export const NOTE_VARIANTS: NoteVariant[] = [
-  ...makeVariants('1',  Z_STANDARD),
-  ...makeVariants('2',  Z_FOLD_TR_LG),
-  ...makeVariants('3',  Z_FOLD_TR_MD),
-  ...makeVariants('4',  Z_FOLD_TR_SM),
-  ...makeVariants('5',  Z_FOLD_BR),
-  ...makeVariants('6',  Z_FOLD_BR2),
-  ...makeVariants('7',  Z_FOLD_DUAL),
-  ...makeVariants('8',  Z_CURL_TR),
-  ...makeVariants('10', Z_FOLD_SQ_LG),
-  ...makeVariants('11', Z_FOLD_TOP_LG),
-  ...makeVariants('12', Z_DIAG_TR),
-  ...makeVariants('13', Z_DIAG_TR2),
-  ...makeVariants('14', Z_DIAG_LG),
+  ...make('1',  Z_FULL),
+  ...make('2',  Z_TR_LG),
+  ...make('3',  Z_TR_MD),
+  ...make('4',  Z_TR_SM),
+  ...make('5',  Z_BL_LG),
+  ...make('6',  Z_BL_MD),
+  ...make('7',  Z_BL_SM),
+  ...make('8',  Z_FULL),
+  ...make('10', Z_FULL),
+  ...make('11', Z_FULL),
+  ...make('12', Z_FULL),
+  ...make('13', Z_FULL),
+  ...make('14', Z_FULL),
   { key: 'yellow_torn',   file: 'yellow_sticky_note_torn.png',   color: 'yellow', zone: Z_TORN_BOT },
   { key: 'yellow_torn_2', file: 'yellow_sticky_note_torn_2.png', color: 'yellow', zone: Z_TORN_TOP },
   { key: 'blue_torn',     file: 'blue_sticky_note_torn.png',     color: 'blue',   zone: Z_TORN_BOT },

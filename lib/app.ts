@@ -315,8 +315,10 @@ export class TongueApp {
     // Textbox sprite structure (109×96px):
     //   rows 17 = top border, rows 18-28 = red header, row 29 = divider
     //   rows 30-77 = white body, ruled lines at 1x rows: 38,45,51,57,63,69
-    const textStartX = tbX + Math.floor((14/109) * tbW)
-    const textWidth  = Math.floor((82/109) * tbW)
+    // Content area confirmed: x=12–98 at 1x (86px wide).
+    // Start text at x=20 (8px inside left border) for a clear left margin.
+    const textStartX = tbX + Math.floor((20/109) * tbW)
+    const textWidth  = Math.floor((75/109) * tbW)
     const firstLineY = tbY + Math.floor((32/96) * tbH)      // start height unchanged
     const lineH      = Math.max(1, Math.floor((8.5/96) * tbH))  // slightly more spacing
     const bodyBottom = tbY + Math.floor((77/96) * tbH)
