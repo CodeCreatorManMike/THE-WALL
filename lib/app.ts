@@ -82,6 +82,7 @@ export class TongueApp {
     this.canvas.addEventListener('pointerdown', this.onPointerDown)
     window.addEventListener('pointermove', this.onPointerMove)
     window.addEventListener('pointerup', this.onPointerUp)
+    window.addEventListener('keydown', this.onKeyDown)
 
     // Hidden input for keyboard/mobile text entry
     this.inputEl = document.createElement('input')
@@ -117,6 +118,7 @@ export class TongueApp {
     this.canvas.removeEventListener('pointerdown', this.onPointerDown)
     window.removeEventListener('pointermove', this.onPointerMove)
     window.removeEventListener('pointerup', this.onPointerUp)
+    window.removeEventListener('keydown', this.onKeyDown)
     this.inputEl?.remove()
   }
 
@@ -486,6 +488,18 @@ export class TongueApp {
   private onNativeInput = () => {
     if (this.state !== 'EDIT') return
     this.editText = this.inputEl.value.slice(0, CHAR_LIMIT)
+  }
+
+  // Desktop keyboard fallback — works even if hidden input focus fails
+  private onKeyDown = (e: KeyboardEvent) => {
+    if (this.state !== 'EDIT') return
+    if (e.key === 'Backspace') {
+      this.editText = this.editText.slice(0, -1)
+    } else if (e.key.length === 1 && this.editText.length < CHAR_LIMIT) {
+      this.editText += e.key
+    }
+    // Keep hidden input in sync
+    this.inputEl.value = this.editText
   }
 
   private onPointerDown = (e: PointerEvent) => {
