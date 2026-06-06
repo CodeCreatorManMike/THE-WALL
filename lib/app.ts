@@ -499,10 +499,10 @@ export class TongueApp {
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.state !== 'EDIT') return
-    // If the hidden input has focus, onNativeInput is already handling every
-    // keystroke via the 'input' event — bail out here to prevent doubling.
-    // Only suppress back-navigation for Backspace when input is empty.
-    if (document.activeElement === this.inputEl) {
+    // On touch devices every keystroke is already handled by onNativeInput
+    // via the 'input' event on the hidden field. Skip here to prevent doubling.
+    // document.activeElement is unreliable on iOS Safari so use isTouch instead.
+    if (this.isTouch) {
       if (e.key === 'Backspace') e.preventDefault()
       return
     }
