@@ -1,14 +1,13 @@
 import { loadAllAssets, type AssetStore } from './assets'
 import {
   getScale, WORLD_SIZE, CANVAS_W, CANVAS_H,
-  COLOR_WALL_BG, COLOR_UI_BG, COLOR_UI_SHADOW,
+  COLOR_WALL_BG, COLOR_WALL_SHADOW, COLOR_UI_BG, COLOR_UI_SHADOW,
   BORDER, CHAR_LIMIT,
   LOADING_FPS, MINI_MIKE_FPS,
-  DEEP_SCROLL_TRIGGER,
 } from './constants'
 import { NOTE_VARIANTS } from './variants'
 import { renderNoteText } from './text'
-import { drawNoteShadow, drawUIShadow } from './shadow'
+import { drawNoteShadow } from './shadow'
 import type { AppState, NoteData, Camera } from './types'
 
 export class TongueApp {
@@ -33,9 +32,8 @@ export class TongueApp {
   private mikeyFrameLoad = 0
   private mikeyLoadLastTick = 0
 
-  // Mini Mike (deep scroll)
-  private mikeyFrame = 0
-  private mikeyLastTick = 0
+  // Poll interval — keeps the wall in sync with other users
+  private pollInterval = 0
 
   // Edit
   private variantIndex = 0
@@ -114,11 +112,14 @@ export class TongueApp {
     try { this.canvas.focus() } catch { /**/ }
 
     this.loadNotes()
+    // Poll every 30s so all users see each other's notes appear live
+    this.pollInterval = window.setInterval(() => this.loadNotes(), 30_000)
     this.rafId = requestAnimationFrame(this.loop)
   }
 
   destroy() {
     this.destroyed = true
+    clearInterval(this.pollInterval)
     cancelAnimationFrame(this.rafId)
     cancelAnimationFrame(this.momentumId)
     window.removeEventListener('resize', this.resize)
@@ -173,7 +174,7 @@ export class TongueApp {
     ctx.fillStyle = COLOR_WALL_BG
     ctx.fillRect(0, 0, w, h)
 
-    // ── Mini Mike animation (always looping during loading) ──
+    // ── Mini Mike animation (loading screen) ──
     const mikey = this.assets.miniMike
     if (mikey.length) {
       const mInterval = 1000 / MINI_MIKE_FPS
@@ -185,9 +186,7 @@ export class TongueApp {
       const mScale = Math.max(3, Math.floor(Math.min(w, h) * 0.003))
       const mw = mFrame.naturalWidth  * mScale
       const mh = mFrame.naturalHeight * mScale
-      const mx = Math.floor(w / 2 - mw / 2)
-      const my = Math.floor(h * 0.25 - mh / 2)
-      ctx.drawImage(mFrame, mx, my, mw, mh)
+      ctx.drawImage(mFrame, Math.floor(w / 2 - mw / 2), Math.floor(h * 0.25 - mh / 2), mw, mh)
     }
 
     // ── Loading bar frames ──
@@ -229,7 +228,8 @@ export class TongueApp {
     const w = this.canvas.width
     const h = this.canvas.height
 
-    ctx.fillStyle = COLOR_UI_BG
+    // Wall background — edit screen mirrors the placement screen
+    ctx.fillStyle = COLOR_WALL_BG
     ctx.fillRect(0, 0, w, h)
 
     const variant = NOTE_VARIANTS[this.variantIndex]
@@ -243,10 +243,10 @@ export class TongueApp {
     const noteX = Math.floor(w * 0.08)
     const noteY = Math.floor(h / 2 - noteH / 2)
 
-    // Shadow on note only (pixel-accurate shape shadow)
+    // Shadow on note — wall shadow colour on wall background
     const mask = this.assets.shadowMasks[variant.key]
     if (mask) {
-      ctx.fillStyle = COLOR_UI_SHADOW
+      ctx.fillStyle = COLOR_WALL_SHADOW
       const le = mask.leftEdge, be = mask.bottomEdge
       for (let i = 0; i < le.length; i += 2) {
         ctx.fillRect(noteX + le[i] * noteScale, noteY + le[i+1] * noteScale, noteScale, noteScale)
@@ -281,18 +281,25 @@ export class TongueApp {
     ctx.drawImage(this.assets.ui.xButton,        edge,           edge,           cornerBtnS, cornerBtnS)
     ctx.drawImage(this.assets.ui.forwardButton,  w-edge-cornerBtnS, edge,       cornerBtnS, cornerBtnS)
 
-    // Variant selection arrows + check — LARGE and clearly visible
-    const arrowS = Math.max(60, Math.floor(Math.min(w,h) * 0.07))
-    const checkS = Math.max(48, Math.floor(Math.min(w,h) * 0.06))
+    // Variant selection arrows + check
+    // arrowS: responsive but not so large it overflows on phones
+    const arrowS = Math.min(
+      Math.max(36, Math.floor(Math.min(w, h) * 0.07)),
+      Math.floor(w * 0.12)   // hard cap: max ~12% of screen width
+    )
+    const checkS = Math.max(32, Math.floor(arrowS * 0.85))
     const noteCentreX = noteX + Math.floor(noteW / 2)
-    const arrowY = noteY + noteH + Math.max(20, Math.floor(h * 0.025))
-    const arrowGap = arrowS + Math.floor(arrowS * 0.4)
+    const arrowY = noteY + noteH + Math.max(16, Math.floor(h * 0.02))
+    // Clamp gap so left arrow never clips off the left edge
+    const naturalGap = arrowS + Math.floor(arrowS * 0.4)
+    const maxGap     = Math.max(4, noteCentreX - arrowS - edge - 4)
+    const arrowGap   = Math.min(naturalGap, maxGap)
 
     ctx.drawImage(this.assets.ui.backButton,    noteCentreX - arrowGap - arrowS, arrowY, arrowS, arrowS)
     ctx.drawImage(this.assets.ui.tickButton,    noteCentreX - Math.floor(checkS/2), arrowY + Math.floor((arrowS-checkS)/2), checkS, checkS)
     ctx.drawImage(this.assets.ui.forwardButton, noteCentreX + arrowGap,           arrowY, arrowS, arrowS)
 
-    const pad = 16
+    const pad = 14
     this.editButtons = {
       xBtn:       { x: edge-pad,               y: edge-pad,                   w: cornerBtnS+pad*2, h: cornerBtnS+pad*2 },
       fwBtn:      { x: w-edge-cornerBtnS-pad,  y: edge-pad,                   w: cornerBtnS+pad*2, h: cornerBtnS+pad*2 },
@@ -314,14 +321,14 @@ export class TongueApp {
   ) {
     // Textbox sprite structure (109×96px):
     //   rows 17 = top border, rows 18-28 = red header, row 29 = divider
-    //   rows 30-77 = white body, ruled lines at 1x rows: 38,45,51,57,63,69
-    // Content area confirmed: x=12–98 at 1x (86px wide).
-    // Start text at x=20 (8px inside left border) for a clear left margin.
+    //   rows 30-76 = white body, ruled lines at 1x rows: 38,45,51,57,63,69
+    // Content area: x=14-97 at 1x (white pixels). Text starts at x=20 (left margin).
+    // lineH uses 7/96 to match actual ruled-line spacing (7px first gap, 6px subsequent).
     const textStartX = tbX + Math.floor((20/109) * tbW)
     const textWidth  = Math.floor((75/109) * tbW)
-    const firstLineY = tbY + Math.floor((32/96) * tbH)      // start height unchanged
-    const lineH      = Math.max(1, Math.floor((8.5/96) * tbH))  // slightly more spacing
-    const bodyBottom = tbY + Math.floor((77/96) * tbH)
+    const firstLineY = tbY + Math.floor((32/96) * tbH)
+    const lineH      = Math.max(1, Math.floor((7/96) * tbH))
+    const bodyBottom = tbY + Math.floor((76/96) * tbH)
 
     const fontSize = Math.max(5, lineH - 2)
 
@@ -362,7 +369,7 @@ export class TongueApp {
   }
 
   // ─── WALL (PLACING / SAVED / VIEW_ONLY) ───────────────────────────────────
-  private renderWall(now: number) {
+  private renderWall(_now: number) {
     const ctx = this.ctx
     const scale = getScale()
     const w = this.canvas.width
@@ -382,7 +389,6 @@ export class TongueApp {
       if (this.isNoteVisible(note, scale)) this.drawNote(ctx, note, sorted, scale)
     }
 
-    this.maybeDrawMiniMike(ctx, now, scale)
     this.renderWallUI(scale)
   }
 
@@ -403,15 +409,8 @@ export class TongueApp {
     const variant = NOTE_VARIANTS.find(v => v.key === note.variantKey)
 
     ctx.save()
-    if (note.rotation) {
-      ctx.translate(sx + sw/2, sy + sh/2)
-      ctx.rotate((note.rotation * Math.PI) / 180)
-      if (sprite) ctx.drawImage(sprite, -sw/2, -sh/2, sw, sh)
-      if (variant) renderNoteText(ctx, note.text, note.color, variant.zone, -sw/2, -sh/2, scale)
-    } else {
-      if (sprite) ctx.drawImage(sprite, sx, sy, sw, sh)
-      if (variant) renderNoteText(ctx, note.text, note.color, variant.zone, sx, sy, scale)
-    }
+    if (sprite) ctx.drawImage(sprite, sx, sy, sw, sh)
+    if (variant) renderNoteText(ctx, note.text, note.color, variant.zone, sx, sy, scale)
     ctx.restore()
   }
 
@@ -419,8 +418,9 @@ export class TongueApp {
     const ctx = this.ctx
     const w = this.canvas.width
     const h = this.canvas.height
-    const btnS = Math.max(32, Math.floor(Math.min(w,h) * 0.04))
-    const edge  = Math.max(20, Math.floor(w * 0.025))
+    // Minimum 44px for reliable touch targets on mobile
+    const btnS = Math.max(44, Math.floor(Math.min(w,h) * 0.05))
+    const edge  = Math.max(20, Math.floor(w * 0.03))
     const pad   = 14
 
     if (this.state === 'PLACING') {
@@ -438,29 +438,6 @@ export class TongueApp {
       this.wallButtons = { leftArrow: { x: edge-pad, y: edge-pad, w: btnS+pad*2, h: btnS+pad*2 } }
     }
     void scale
-  }
-
-  private maybeDrawMiniMike(ctx: CanvasRenderingContext2D, now: number, scale: number) {
-    const cameraStartY = WORLD_SIZE / 2 - CANVAS_H / 2
-    if (this.camera.y - cameraStartY < DEEP_SCROLL_TRIGGER) return
-
-    const frames = this.assets.miniMike
-    if (!frames.length) return
-
-    const interval = 1000 / MINI_MIKE_FPS
-    if (now - this.mikeyLastTick > interval) {
-      this.mikeyLastTick = now
-      this.mikeyFrame = (this.mikeyFrame + 1) % frames.length
-    }
-    const frame = frames[this.mikeyFrame]
-    const fw = Math.floor(frame.naturalWidth  * scale)
-    const fh = Math.floor(frame.naturalHeight * scale)
-    const worldY = cameraStartY + DEEP_SCROLL_TRIGGER + CANVAS_H
-    ctx.drawImage(frame,
-      Math.floor(this.canvas.width  / 2 - fw / 2),
-      Math.floor((worldY - this.camera.y) * scale),
-      fw, fh
-    )
   }
 
   // ─── Cursor ────────────────────────────────────────────────────────────────
@@ -717,7 +694,7 @@ export class TongueApp {
   // ─── Save note ─────────────────────────────────────────────────────────────
   private async confirmNote() {
     if (!this.activeNote) return
-    this.activeNote.rotation = (Math.random() - 0.5) * 16
+    this.activeNote.rotation = 0
     this.activeNote.zIndex = ++this.globalZIndex
     this.savedNotes.push({ ...this.activeNote })
     this.transitionTo('SAVED')

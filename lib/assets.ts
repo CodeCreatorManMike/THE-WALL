@@ -103,7 +103,7 @@ export async function loadAllAssets(): Promise<AssetStore> {
 
   const miniMike = await Promise.all(
     Array.from({ length: MINI_MIKE_FRAME_COUNT }, (_, i) =>
-      loadImage(`/assets/mini-mike/sprite-000${i + 4}.png`)
+      loadImage(`/assets/mini-mike/mini-mike-${i + 1}.png`)
     )
   )
 

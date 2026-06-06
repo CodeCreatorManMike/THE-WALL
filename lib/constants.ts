@@ -57,13 +57,10 @@ export const FONT_MAX = 8
 export const FONT_MIN = 5
 export const CHAR_LIMIT = 24
 
-// ─── Deep scroll trigger (world Y offset from center) ────────────────────────
-export const DEEP_SCROLL_TRIGGER = 1960  // 10 × 196
-
 // ─── Loading animation ───────────────────────────────────────────────────────
 export const LOADING_FRAME_COUNT = 13
 export const LOADING_FPS = 12
 
-// ─── Mini Mike sprites ───────────────────────────────────────────────────────
-export const MINI_MIKE_FRAME_COUNT = 4
-export const MINI_MIKE_FPS = 6
+// ─── Mini Mike (loading screen only) ─────────────────────────────────────────
+export const MINI_MIKE_FRAME_COUNT = 6
+export const MINI_MIKE_FPS = 8

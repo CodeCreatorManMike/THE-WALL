@@ -31,17 +31,18 @@ export interface NoteVariant {
 
 // All zones use x=2 for 1px margin from sprite border.
 // Width 43 = sprite width 48 − 2px left margin − 3px right margin.
-// Full body height = rows 16→47 = h:31
+// Body starts at row 15 (header = rows 0–14). Zone starts at y:15 — no gap.
+// Full body height = rows 15→47 = h:33
 
-const Z_FULL: TextZone       = { x: 2, y: 16, w: 43, h: 31 }   // no fold
-const Z_TR_LG: TextZone      = { x: 2, y: 16, w: 43, h: 18 }   // top-right fold large  (stop at row 33)
-const Z_TR_MD: TextZone      = { x: 2, y: 16, w: 43, h: 23 }   // top-right fold medium (stop at row 38)
-const Z_TR_SM: TextZone      = { x: 2, y: 16, w: 43, h: 26 }   // top-right fold small  (stop at row 41)
-const Z_BL_LG: TextZone      = { x: 2, y: 16, w: 43, h: 18 }   // bottom-left fold large
-const Z_BL_MD: TextZone      = { x: 2, y: 16, w: 43, h: 21 }   // bottom-left fold medium
-const Z_BL_SM: TextZone      = { x: 2, y: 16, w: 43, h: 24 }   // bottom-left fold small
-const Z_TORN_BOT: TextZone   = { x: 2, y: 16, w: 43, h: 22 }   // torn bottom (clean to row 37)
-const Z_TORN_TOP: TextZone   = { x: 2, y: 22, w: 43, h: 24 }   // torn top    (clean from row 22)
+const Z_FULL: TextZone       = { x: 2, y: 15, w: 43, h: 33 }   // no fold        (rows 15–47)
+const Z_TR_LG: TextZone      = { x: 2, y: 15, w: 43, h: 19 }   // top-right fold large  (stop at row 33)
+const Z_TR_MD: TextZone      = { x: 2, y: 15, w: 43, h: 24 }   // top-right fold medium (stop at row 38)
+const Z_TR_SM: TextZone      = { x: 2, y: 15, w: 43, h: 27 }   // top-right fold small  (stop at row 41)
+const Z_BL_LG: TextZone      = { x: 2, y: 15, w: 43, h: 19 }   // bottom-left fold large
+const Z_BL_MD: TextZone      = { x: 2, y: 15, w: 43, h: 22 }   // bottom-left fold medium
+const Z_BL_SM: TextZone      = { x: 2, y: 15, w: 43, h: 25 }   // bottom-left fold small
+const Z_TORN_BOT: TextZone   = { x: 2, y: 15, w: 43, h: 23 }   // torn bottom    (clean to row 37)
+const Z_TORN_TOP: TextZone   = { x: 2, y: 22, w: 43, h: 24 }   // torn top       (clean from row 22)
 
 function make(num: string, zone: TextZone): NoteVariant[] {
   return [

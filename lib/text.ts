@@ -55,7 +55,7 @@ export function renderNoteText(
 
   // Pixel-accurate wrapping: measure each character as it's added to the line
   const lines = wrapByMeasure(ctx, text, zoneW)
-  const lineH  = (FONT_MAX + 2) * fs
+  const lineH  = FONT_MAX * fs
 
   // Clip strictly to zone — text stops at zone boundary
   ctx.beginPath()
