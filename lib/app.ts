@@ -501,8 +501,6 @@ export class TongueApp {
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.state !== 'EDIT') return
-    // Skip if the hidden input is focused (mobile path — onNativeInput handles it)
-    if (document.activeElement === this.inputEl) return
     if (e.key === 'Backspace') {
       e.preventDefault()
       this.editText = this.editText.slice(0, -1)
@@ -586,9 +584,9 @@ export class TongueApp {
       return
     }
 
-    // Clicking anywhere else → focus hidden input for typing
+    // Clicking anywhere else — canvas stays focused (keyboard events come via window listener)
     this.inputEl.value = this.editText
-    this.inputEl.focus()
+    // Do NOT focus inputEl — that would block the window keydown handler
   }
 
   private syncInputToEditText() {
