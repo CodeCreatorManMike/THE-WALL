@@ -1,14 +1,35 @@
 import { loadAllAssets, type AssetStore } from './assets'
 import {
   getScale, WORLD_SIZE, CANVAS_W, CANVAS_H,
-  COLOR_WALL_BG, COLOR_WALL_SHADOW, COLOR_UI_BG, COLOR_UI_SHADOW,
-  BORDER, CHAR_LIMIT,
+  COLOR_WALL_BG, COLOR_WALL_SHADOW,
+  BORDER, CHAR_LIMIT, CHAR_LIMIT_BLANK,
   LOADING_FPS, MINI_MIKE_FPS,
 } from './constants'
-import { NOTE_VARIANTS } from './variants'
+import { NOTE_VARIANTS, getVariantsByType, type NoteVariant } from './variants'
 import { renderNoteText } from './text'
 import { drawNoteShadow } from './shadow'
 import type { AppState, NoteData, Camera } from './types'
+
+type ItemGroup = 'sticky' | 'polaroid' | 'blank'
+const GROUP_LABELS: Record<ItemGroup, string> = {
+  sticky:   'STICKY NOTE',
+  polaroid: 'POLAROIDS',
+  blank:    'BLANK NOTE',
+}
+
+// Resize a user-uploaded image to a fixed size before storing in the DB.
+// Keeps the base64 payload under ~100KB (JPEG 80% at 320×240).
+function resizeImageForStorage(img: HTMLImageElement): string {
+  const TARGET_W = 320
+  const TARGET_H = 240
+  const c = document.createElement('canvas')
+  c.width = TARGET_W
+  c.height = TARGET_H
+  const ctx = c.getContext('2d')!
+  ctx.imageSmoothingEnabled = true
+  ctx.drawImage(img, 0, 0, TARGET_W, TARGET_H)
+  return c.toDataURL('image/jpeg', 0.8)
+}
 
 export class TongueApp {
   private canvas: HTMLCanvasElement
@@ -18,10 +39,9 @@ export class TongueApp {
   private destroyed = false
   private rafId = 0
 
-  // Hidden input for text (native keyboard on all platforms)
   private inputEl!: HTMLInputElement
+  private fileInputEl!: HTMLInputElement
 
-  // State
   private state: AppState = 'LOADING'
 
   // Loading
@@ -32,15 +52,21 @@ export class TongueApp {
   private mikeyFrameLoad = 0
   private mikeyLoadLastTick = 0
 
-  // Poll interval — keeps the wall in sync with other users
   private pollInterval = 0
 
-  // Edit
-  private variantIndex = 0
+  // Edit — item group + per-group variant index
+  private itemGroup: ItemGroup = 'sticky'
+  private groupVariantIdx = 0
   private editTextboxRect: { x: number; y: number; w: number; h: number } | null = null
   private editText = ''
   private cursorVisible = true
   private cursorLastBlink = 0
+
+  // Polaroid image (current session)
+  private polaroidImageData = ''
+  private polaroidImage: HTMLImageElement | null = null
+  // Cache data-URL → loaded HTMLImageElement for wall rendering
+  private imageCache = new Map<string, HTMLImageElement | null>()
 
   // Wall
   private camera: Camera = { x: 0, y: 0 }
@@ -48,7 +74,7 @@ export class TongueApp {
   private activeNote: NoteData | null = null
   private globalZIndex = 0
 
-  // Drag/pan
+  // Drag / pan
   private isDraggingWall = false
   private isDraggingNote = false
   private dragStart = { x: 0, y: 0 }
@@ -58,7 +84,7 @@ export class TongueApp {
   private lastMovePos = { x: 0, y: 0 }
   private momentumId = 0
 
-  // Pinch-to-zoom (VIEW_ONLY / SAVED states only)
+  // Pinch-to-zoom
   private cameraZoom = 1.0
   private activePointers = new Map<number, { x: number; y: number }>()
   private pinchStartDist = 0
@@ -70,7 +96,7 @@ export class TongueApp {
   private isGripping = false
   private isTouch = false
 
-  // Button hit areas
+  // Hit areas
   private editButtons: Record<string, {x:number;y:number;w:number;h:number}> = {}
   private wallButtons: Record<string, {x:number;y:number;w:number;h:number}> = {}
   private loadingButtons: Record<string, {x:number;y:number;w:number;h:number}> = {}
@@ -81,22 +107,35 @@ export class TongueApp {
     this.ctx.imageSmoothingEnabled = false
   }
 
+  // ─── Variant helpers ───────────────────────────────────────────────────────
+  private get groupVariants(): NoteVariant[] {
+    return getVariantsByType(this.itemGroup)
+  }
+
+  private get currentVariant(): NoteVariant {
+    const gv = this.groupVariants
+    const idx = Math.max(0, Math.min(this.groupVariantIdx, gv.length - 1))
+    return gv[idx] || NOTE_VARIANTS[0]
+  }
+
+  private get currentCharLimit(): number {
+    return this.itemGroup === 'blank' ? CHAR_LIMIT_BLANK : CHAR_LIMIT
+  }
+
   // ─── Start ─────────────────────────────────────────────────────────────────
   async start() {
-    // Make canvas focusable so keyboard events reach it directly
     this.canvas.setAttribute('tabindex', '0')
     this.canvas.style.outline = 'none'
 
     this.resize()
     window.addEventListener('resize', this.resize)
     this.canvas.addEventListener('pointerdown', this.onPointerDown)
-    // passive:false so we can call preventDefault() inside
     this.canvas.addEventListener('touchend', this.onTouchEndKeyboard, { passive: false })
     window.addEventListener('pointermove', this.onPointerMove)
     window.addEventListener('pointerup', this.onPointerUp)
+    window.addEventListener('pointercancel', this.onPointerCancel)
     window.addEventListener('keydown', this.onKeyDown)
 
-    // Hidden input — only used for mobile virtual keyboard triggering
     this.inputEl = document.createElement('input')
     this.inputEl.type = 'text'
     this.inputEl.maxLength = CHAR_LIMIT
@@ -105,8 +144,6 @@ export class TongueApp {
     this.inputEl.setAttribute('autocorrect', 'off')
     this.inputEl.setAttribute('autocapitalize', 'none')
     this.inputEl.setAttribute('spellcheck', 'false')
-    // Off-screen but NOT display:none/visibility:hidden — iOS opens keyboard for
-    // position:fixed at -9999px. font-size:16px prevents iOS viewport zoom on focus.
     this.inputEl.style.cssText = `
       position: fixed; top: -9999px; left: -9999px;
       opacity: 0; width: 1px; height: 1px; font-size: 16px;
@@ -116,17 +153,26 @@ export class TongueApp {
     document.body.appendChild(this.inputEl)
     this.inputEl.addEventListener('input', this.onNativeInput)
 
+    this.fileInputEl = document.createElement('input')
+    this.fileInputEl.type = 'file'
+    this.fileInputEl.accept = 'image/*'
+    this.fileInputEl.style.cssText = `
+      position: fixed; top: -9999px; left: -9999px;
+      opacity: 0; width: 1px; height: 1px;
+      pointer-events: none;
+    `
+    document.body.appendChild(this.fileInputEl)
+    this.fileInputEl.addEventListener('change', this.onFileSelected)
+
     this.assets = await loadAllAssets()
     this.ready = true
 
     this.camera.x = WORLD_SIZE / 2 - CANVAS_W / 2
     this.camera.y = WORLD_SIZE / 2 - CANVAS_H / 2
 
-    // Focus canvas immediately so keyboard input works from the start
     try { this.canvas.focus() } catch { /**/ }
 
     this.loadNotes()
-    // Poll every 30s so all users see each other's notes appear live
     this.pollInterval = window.setInterval(() => this.loadNotes(), 30_000)
     this.rafId = requestAnimationFrame(this.loop)
   }
@@ -141,8 +187,10 @@ export class TongueApp {
     this.canvas.removeEventListener('touchend', this.onTouchEndKeyboard)
     window.removeEventListener('pointermove', this.onPointerMove)
     window.removeEventListener('pointerup', this.onPointerUp)
+    window.removeEventListener('pointercancel', this.onPointerCancel)
     window.removeEventListener('keydown', this.onKeyDown)
     this.inputEl?.remove()
+    this.fileInputEl?.remove()
   }
 
   // ─── Resize ────────────────────────────────────────────────────────────────
@@ -185,11 +233,9 @@ export class TongueApp {
     const h = this.canvas.height
     const scale = getScale()
 
-    // Wall-color background (not black)
     ctx.fillStyle = COLOR_WALL_BG
     ctx.fillRect(0, 0, w, h)
 
-    // ── Mini Mike animation (loading screen) ──
     const mikey = this.assets.miniMike
     if (mikey.length) {
       const mInterval = 1000 / MINI_MIKE_FPS
@@ -198,7 +244,6 @@ export class TongueApp {
         this.mikeyFrameLoad = (this.mikeyFrameLoad + 1) % mikey.length
       }
       const mFrame = mikey[this.mikeyFrameLoad]
-      // Cap to 80% of screen width so mini mike never overflows on narrow screens
       const mScale = Math.max(1, Math.min(
         Math.max(3, Math.floor(Math.min(w, h) * 0.003)),
         Math.floor(w * 0.80 / mFrame.naturalWidth)
@@ -208,7 +253,6 @@ export class TongueApp {
       ctx.drawImage(mFrame, Math.floor(w / 2 - mw / 2), Math.floor(h * 0.28 - mh / 2), mw, mh)
     }
 
-    // ── Loading bar frames ──
     const frames = this.assets.loading
     if (frames.length) {
       const interval = 1000 / LOADING_FPS
@@ -224,7 +268,6 @@ export class TongueApp {
         }
       }
       const frame = frames[this.loadingFrame]
-      // Cap bar to 80% of screen width — prevents overflow on phones
       const maxBarScale = Math.max(2, Math.floor(w * 0.80 / frame.naturalWidth))
       const barScale = Math.min(Math.max(scale * 2, 4), maxBarScale)
       const fw = frame.naturalWidth  * barScale
@@ -232,7 +275,6 @@ export class TongueApp {
       ctx.drawImage(frame, Math.floor(w/2 - fw/2), Math.floor(h * 0.62 - fh/2), fw, fh)
     }
 
-    // In loop mode: show → top-right to return to EDIT
     if (this.loadingIsLoop) {
       const btnS = Math.max(32, Math.floor(Math.min(w,h) * 0.04))
       const edge  = Math.max(20, Math.floor(w * 0.025))
@@ -249,13 +291,11 @@ export class TongueApp {
     const w = this.canvas.width
     const h = this.canvas.height
 
-    // Wall background — edit screen mirrors the placement screen
     ctx.fillStyle = COLOR_WALL_BG
     ctx.fillRect(0, 0, w, h)
 
-    const variant = NOTE_VARIANTS[this.variantIndex]
+    const variant = this.currentVariant
 
-    // ── Note preview + textbox: centered as a single block ───────────────────
     const noteDisplayPx = Math.min(Math.floor(Math.min(w, h) * 0.38), 320)
     const noteW = noteDisplayPx
     const noteH = noteDisplayPx
@@ -268,9 +308,14 @@ export class TongueApp {
     const gap    = Math.max(16, Math.floor(w * 0.025))
     const totalW = noteW + gap + tbW
     const noteX  = Math.max(Math.floor(w * 0.02), Math.floor((w - totalW) / 2))
-    const noteY  = Math.floor(h / 2 - noteH / 2)
 
-    // Shadow on note — wall shadow colour on wall background
+    const labelFontSz = Math.max(7, Math.floor(noteDisplayPx * 0.10))
+    const iconBtnS    = Math.max(18, Math.floor(noteDisplayPx * 0.13))
+    const labelRowH   = iconBtnS + Math.max(6, Math.floor(h * 0.012))
+
+    const noteY  = Math.floor(h / 2 - noteH / 2) + Math.floor(labelRowH / 2)
+
+    // Shadow
     const mask = this.assets.shadowMasks[variant.key]
     if (mask) {
       ctx.fillStyle = COLOR_WALL_SHADOW
@@ -283,56 +328,100 @@ export class TongueApp {
       }
     }
 
+    // Polaroid: draw user photo behind sprite
+    if (variant.type === 'polaroid' && this.polaroidImage && variant.imageArea) {
+      const ia = variant.imageArea
+      ctx.save()
+      ctx.imageSmoothingEnabled = true
+      ctx.beginPath()
+      ctx.rect(noteX + ia.x * noteScale, noteY + ia.y * noteScale, ia.w * noteScale, ia.h * noteScale)
+      ctx.clip()
+      ctx.drawImage(this.polaroidImage, noteX + ia.x * noteScale, noteY + ia.y * noteScale, ia.w * noteScale, ia.h * noteScale)
+      ctx.restore()
+      ctx.imageSmoothingEnabled = false
+    }
+
     const sprite = this.assets.notes[variant.key]
     if (sprite) ctx.drawImage(sprite, noteX, noteY, noteW, noteH)
-    renderNoteText(ctx, this.editText, variant.color, variant.zone, noteX, noteY, noteScale, getScale())
+    renderNoteText(
+      ctx, this.editText, variant.color, variant.zone,
+      noteX, noteY, noteScale, getScale(),
+      variant.type === 'polaroid'
+    )
 
-    // ── Textbox widget (fixed gap to the right of the note) ──────────────────
+    // Textbox
     const tbX = noteX + noteW + gap
-    const tbY = Math.floor(h / 2 - tbH / 2)
-
-    // Track bounds so mobile tap can focus the hidden input for the keyboard
+    const tbY = Math.floor(h / 2 - tbH / 2) + Math.floor(labelRowH / 2)
     this.editTextboxRect = { x: tbX, y: tbY, w: tbW, h: tbH }
-
     if (this.assets.ui.textbox) ctx.drawImage(this.assets.ui.textbox, tbX, tbY, tbW, tbH)
     this.renderTextboxText(ctx, tbX, tbY, tbW, tbH)
 
-    // ── Buttons ───────────────────────────────────────────────────────────────
-    // Corner buttons (X, view wall)
+    // Type label row
+    const labelRowY = noteY - labelRowH
+    ctx.save()
+    ctx.font = `${labelFontSz}px minecraft`
+    ctx.imageSmoothingEnabled = false
+    ctx.fillStyle = '#ffffff'
+    ctx.textBaseline = 'middle'
+    const labelText = GROUP_LABELS[this.itemGroup]
+    const labelW = ctx.measureText(labelText).width
+    ctx.fillText(labelText, noteX, labelRowY + Math.floor(iconBtnS / 2))
+    ctx.restore()
+
+    const swapX = noteX + Math.ceil(labelW) + 6
+    const swapY = labelRowY
+    ctx.drawImage(this.assets.ui.swapItemButton, swapX, swapY, iconBtnS, iconBtnS)
+
+    let uploadBtnRect: { x:number;y:number;w:number;h:number } | null = null
+    if (this.itemGroup === 'polaroid') {
+      const uploadX = swapX + iconBtnS + 4
+      ctx.drawImage(this.assets.ui.uploadItemButton, uploadX, swapY, iconBtnS, iconBtnS)
+      uploadBtnRect = { x: uploadX - 8, y: swapY - 8, w: iconBtnS + 16, h: iconBtnS + 16 }
+    }
+
+    // Corner buttons
     const cornerBtnS = Math.max(36, Math.floor(Math.min(w,h) * 0.045))
     const edge = Math.max(20, Math.floor(w * 0.025))
+    ctx.drawImage(this.assets.ui.xButton,       edge,               edge, cornerBtnS, cornerBtnS)
+    ctx.drawImage(this.assets.ui.forwardButton, w-edge-cornerBtnS,  edge, cornerBtnS, cornerBtnS)
 
-    ctx.drawImage(this.assets.ui.xButton,        edge,           edge,           cornerBtnS, cornerBtnS)
-    ctx.drawImage(this.assets.ui.forwardButton,  w-edge-cornerBtnS, edge,       cornerBtnS, cornerBtnS)
-
-    // Variant selection arrows + check
-    // arrowS: responsive but not so large it overflows on phones
+    // Arrows + check
     const arrowS = Math.min(
       Math.max(36, Math.floor(Math.min(w, h) * 0.07)),
-      Math.floor(w * 0.12)   // hard cap: max ~12% of screen width
+      Math.floor(w * 0.12)
     )
     const checkS = Math.max(32, Math.floor(arrowS * 0.85))
     const noteCentreX = noteX + Math.floor(noteW / 2)
     const arrowY = noteY + noteH + Math.max(16, Math.floor(h * 0.02))
-    // Clamp gap so left arrow never clips off the left edge
     const naturalGap = arrowS + Math.floor(arrowS * 0.4)
     const maxGap     = Math.max(4, noteCentreX - arrowS - edge - 4)
     const arrowGap   = Math.min(naturalGap, maxGap)
 
-    ctx.drawImage(this.assets.ui.backButton,    noteCentreX - arrowGap - arrowS, arrowY, arrowS, arrowS)
-    ctx.drawImage(this.assets.ui.tickButton,    noteCentreX - Math.floor(checkS/2), arrowY + Math.floor((arrowS-checkS)/2), checkS, checkS)
-    ctx.drawImage(this.assets.ui.forwardButton, noteCentreX + arrowGap,           arrowY, arrowS, arrowS)
+    ctx.drawImage(this.assets.ui.tickButton,
+      noteCentreX - Math.floor(checkS/2),
+      arrowY + Math.floor((arrowS - checkS) / 2),
+      checkS, checkS
+    )
 
     const pad = 14
-    this.editButtons = {
-      xBtn:       { x: edge-pad,               y: edge-pad,                   w: cornerBtnS+pad*2, h: cornerBtnS+pad*2 },
-      fwBtn:      { x: w-edge-cornerBtnS-pad,  y: edge-pad,                   w: cornerBtnS+pad*2, h: cornerBtnS+pad*2 },
-      leftArrow:  { x: noteCentreX-arrowGap-arrowS-pad, y: arrowY-pad,        w: arrowS+pad*2, h: arrowS+pad*2 },
-      checkBtn:   { x: noteCentreX-checkS/2-pad, y: arrowY-pad,               w: checkS+pad*2, h: checkS+pad*2 },
-      rightArrow: { x: noteCentreX+arrowGap-pad, y: arrowY-pad,               w: arrowS+pad*2, h: arrowS+pad*2 },
+    const newButtons: Record<string, {x:number;y:number;w:number;h:number}> = {
+      xBtn:     { x: edge - pad,              y: edge - pad,  w: cornerBtnS + pad*2, h: cornerBtnS + pad*2 },
+      fwBtn:    { x: w-edge-cornerBtnS-pad,   y: edge - pad,  w: cornerBtnS + pad*2, h: cornerBtnS + pad*2 },
+      checkBtn: { x: noteCentreX - checkS/2 - pad, y: arrowY - pad, w: checkS + pad*2, h: arrowS + pad*2 },
+      swapBtn:  { x: swapX - 8, y: swapY - 8, w: iconBtnS + 16, h: iconBtnS + 16 },
     }
 
-    // Cursor blink
+    if (this.itemGroup !== 'blank') {
+      ctx.drawImage(this.assets.ui.backButton,    noteCentreX - arrowGap - arrowS, arrowY, arrowS, arrowS)
+      ctx.drawImage(this.assets.ui.forwardButton, noteCentreX + arrowGap,          arrowY, arrowS, arrowS)
+      newButtons.leftArrow  = { x: noteCentreX - arrowGap - arrowS - pad, y: arrowY - pad, w: arrowS + pad*2, h: arrowS + pad*2 }
+      newButtons.rightArrow = { x: noteCentreX + arrowGap - pad,          y: arrowY - pad, w: arrowS + pad*2, h: arrowS + pad*2 }
+    }
+
+    if (uploadBtnRect) newButtons.uploadBtn = uploadBtnRect
+
+    this.editButtons = newButtons
+
     if (now - this.cursorLastBlink > 500) {
       this.cursorVisible = !this.cursorVisible
       this.cursorLastBlink = now
@@ -343,20 +432,13 @@ export class TongueApp {
     ctx: CanvasRenderingContext2D,
     tbX: number, tbY: number, tbW: number, tbH: number
   ) {
-    // Textbox sprite structure (109×96px):
-    //   rows 17 = top border, rows 18-28 = red header, row 29 = divider
-    //   rows 30-76 = white body, ruled lines at 1x rows: 38,45,51,57,63,69
-    // Content area: x=14-97 at 1x (white pixels). Text starts at x=20 (left margin).
-    // lineH uses 7/96 to match actual ruled-line spacing (7px first gap, 6px subsequent).
     const textStartX = tbX + Math.floor((20/109) * tbW)
     const textWidth  = Math.floor((75/109) * tbW)
     const firstLineY = tbY + Math.floor((32/96) * tbH)
     const lineH      = Math.max(1, Math.floor((7/96) * tbH))
     const bodyBottom = tbY + Math.floor((76/96) * tbH)
+    const fontSize   = Math.max(5, lineH - 2)
 
-    const fontSize = Math.max(5, lineH - 2)
-
-    // Set font before measuring for accurate char width
     ctx.save()
     ctx.font = `${fontSize}px minecraft`
     ctx.imageSmoothingEnabled = false
@@ -392,10 +474,9 @@ export class TongueApp {
     ctx.restore()
   }
 
-  // ─── WALL (PLACING / SAVED / VIEW_ONLY) ───────────────────────────────────
+  // ─── WALL ──────────────────────────────────────────────────────────────────
   private renderWall(_now: number) {
     const ctx = this.ctx
-    // cameraZoom = 1.0 in PLACING/EDIT (reset on transition), >1 or <1 when pinching
     const scale = getScale() * this.cameraZoom
     const w = this.canvas.width
     const h = this.canvas.height
@@ -427,23 +508,51 @@ export class TongueApp {
     const sw = 48 * scale, sh = 48 * scale
     const mask = this.assets.shadowMasks[note.variantKey]
 
-    // Pixel-accurate shadow (follows actual sprite edges)
     if (mask) drawNoteShadow(ctx, note, mask, allNotes, scale)
 
-    const sprite = this.assets.notes[note.variantKey]
+    const sprite  = this.assets.notes[note.variantKey]
     const variant = NOTE_VARIANTS.find(v => v.key === note.variantKey)
 
     ctx.save()
+
+    // Polaroid: draw user photo behind the frame sprite
+    if (variant?.type === 'polaroid' && note.imageData && variant.imageArea) {
+      const userImg = this.getCachedImage(note.imageData)
+      if (userImg) {
+        const ia = variant.imageArea
+        ctx.save()
+        ctx.imageSmoothingEnabled = true
+        ctx.beginPath()
+        ctx.rect(sx + ia.x * scale, sy + ia.y * scale, ia.w * scale, ia.h * scale)
+        ctx.clip()
+        ctx.drawImage(userImg, sx + ia.x * scale, sy + ia.y * scale, ia.w * scale, ia.h * scale)
+        ctx.restore()
+        ctx.imageSmoothingEnabled = false
+      }
+    }
+
     if (sprite) ctx.drawImage(sprite, sx, sy, sw, sh)
-    if (variant) renderNoteText(ctx, note.text, note.color, variant.zone, sx, sy, scale)
+    if (variant) renderNoteText(
+      ctx, note.text, note.color, variant.zone, sx, sy, scale,
+      undefined, variant.type === 'polaroid'
+    )
     ctx.restore()
+  }
+
+  private getCachedImage(dataUrl: string): HTMLImageElement | null {
+    if (!dataUrl) return null
+    if (this.imageCache.has(dataUrl)) return this.imageCache.get(dataUrl) || null
+    this.imageCache.set(dataUrl, null)
+    const img = new Image()
+    img.onload = () => { this.imageCache.set(dataUrl, img) }
+    img.src = dataUrl
+    return null
   }
 
   private renderWallUI(scale: number) {
     const ctx = this.ctx
     const w = this.canvas.width
     const h = this.canvas.height
-    // Minimum 44px for reliable touch targets on mobile
     const btnS = Math.max(44, Math.floor(Math.min(w,h) * 0.05))
     const edge  = Math.max(20, Math.floor(w * 0.03))
     const pad   = 14
@@ -473,8 +582,6 @@ export class TongueApp {
     const img = this.isGripping ? this.assets.ui.handGripping : this.assets.ui.handIdle
     if (!img) return
     const cw = 24 * scale, ch = 24 * scale
-    // Touch: raise the sprite so the visual fingertip aligns with the tap point.
-    // Desktop hotspot (8,4) is for the CSS cursor; on touch the sprite sits too low.
     const hotY = this.isTouch ? 12 * scale : 4 * scale
     ctx.drawImage(img, this.mouseX - 8 * scale, this.mouseY - hotY, cw, ch)
   }
@@ -501,15 +608,12 @@ export class TongueApp {
   // ─── Input ─────────────────────────────────────────────────────────────────
   private onNativeInput = () => {
     if (this.state !== 'EDIT') return
-    this.editText = this.inputEl.value.slice(0, CHAR_LIMIT)
+    this.editText = this.inputEl.value.slice(0, this.currentCharLimit)
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.state !== 'EDIT') return
     if (this.isTouch) {
-      // Backspace: handle explicitly — iOS input event for deletions is unreliable.
-      // Regular chars come through onNativeInput via the input event (no doubling
-      // because we return here without appending anything).
       if (e.key === 'Backspace' && this.editText.length > 0) {
         e.preventDefault()
         this.editText = this.editText.slice(0, -1)
@@ -517,18 +621,41 @@ export class TongueApp {
       }
       return
     }
-    // ── Desktop ──────────────────────────────────────────────────────────────
     if (e.key === 'Backspace') {
       e.preventDefault()
       this.editText = this.editText.slice(0, -1)
-    } else if (e.key.length === 1 && this.editText.length < CHAR_LIMIT) {
+    } else if (e.key.length === 1 && this.editText.length < this.currentCharLimit) {
       this.editText += e.key
     }
     this.inputEl.value = this.editText
   }
 
+  private onFileSelected = () => {
+    const file = this.fileInputEl.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string
+      if (!dataUrl) return
+      // Load full image, then resize before storing
+      const rawImg = new Image()
+      rawImg.onload = () => {
+        const resized = resizeImageForStorage(rawImg)
+        this.polaroidImageData = resized
+        const displayImg = new Image()
+        displayImg.onload = () => {
+          this.polaroidImage = displayImg
+          this.imageCache.set(resized, displayImg)
+        }
+        displayImg.src = resized
+      }
+      rawImg.src = dataUrl
+    }
+    reader.readAsDataURL(file)
+    this.fileInputEl.value = ''
+  }
+
   private onPointerDown = (e: PointerEvent) => {
-    // Don't preventDefault in EDIT state — allows normal focus transfer to canvas
     if (this.state !== 'EDIT') e.preventDefault()
     this.mouseX = e.clientX
     this.mouseY = e.clientY
@@ -536,7 +663,6 @@ export class TongueApp {
     this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     try { this.canvas.setPointerCapture(e.pointerId) } catch { /**/ }
 
-    // Two fingers in zoomable states → start pinch, cancel any wall pan
     const zoomable = this.state === 'VIEW_ONLY' || this.state === 'SAVED'
     if (this.activePointers.size === 2 && zoomable) {
       this.isDraggingWall = false
@@ -550,7 +676,6 @@ export class TongueApp {
     if (this.state === 'LOADING') {
       this.handleLoadingClick(e)
     } else if (this.state === 'EDIT') {
-      // Touch: don't focus canvas — it steals focus from inputEl and dismisses keyboard
       if (e.pointerType !== 'touch') this.canvas.focus()
       this.handleEditClick(e)
     } else if (this.state === 'PLACING') {
@@ -565,9 +690,6 @@ export class TongueApp {
     }
   }
 
-  // ─── Touch keyboard (iOS-safe) ─────────────────────────────────────────────
-  // iOS only opens the keyboard when .focus() is called SYNCHRONOUSLY inside a
-  // touchend handler. Using pointerdown (= touchstart) or any async path kills it.
   private onTouchEndKeyboard = (e: TouchEvent) => {
     if (this.state !== 'EDIT') return
     const r = this.editTextboxRect
@@ -576,10 +698,10 @@ export class TongueApp {
     if (!touch) return
     const { clientX: x, clientY: y } = touch
     if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
-      e.preventDefault()   // suppress 300ms ghost click
+      e.preventDefault()
       e.stopPropagation()
       this.inputEl.value = this.editText
-      this.inputEl.focus() // synchronous inside touchend — keyboard opens and stays
+      this.inputEl.focus()
     }
   }
 
@@ -588,7 +710,6 @@ export class TongueApp {
     this.mouseY = e.clientY
     this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
-    // Two-finger pinch in progress
     if (this.activePointers.size === 2 && this.pinchStartDist > 0 &&
         (this.state === 'VIEW_ONLY' || this.state === 'SAVED')) {
       this.handlePinchMove()
@@ -609,26 +730,29 @@ export class TongueApp {
     if (was) this.applyMomentum()
   }
 
-  // ─── Pinch-to-zoom ─────────────────────────────────────────────────────────
+  // iOS can fire pointercancel instead of pointerup (palm rejection, system gestures).
+  // Clean up identically so the pointer map never accumulates ghost entries.
+  private onPointerCancel = (e: PointerEvent) => {
+    this.activePointers.delete(e.pointerId)
+    if (this.activePointers.size < 2) this.pinchStartDist = 0
+    this.isGripping = false
+    this.isDraggingNote = false
+    this.isDraggingWall = false
+  }
+
+  // ─── Pinch ─────────────────────────────────────────────────────────────────
   private handlePinchMove() {
     if (this.pinchStartDist === 0) return
     const pts = [...this.activePointers.values()]
     const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
     const cx   = (pts[0].x + pts[1].x) / 2
     const cy   = (pts[0].y + pts[1].y) / 2
-
     const baseScale   = getScale()
     const oldEffScale = baseScale * this.cameraZoom
-
-    // Keep the world point under the pinch centre fixed as zoom changes
     const worldCX = cx / oldEffScale + this.camera.x
     const worldCY = cy / oldEffScale + this.camera.y
-
-    const newZoom = Math.max(0.25, Math.min(4.0,
-      this.pinchStartZoom * (dist / this.pinchStartDist)
-    ))
+    const newZoom = Math.max(0.25, Math.min(4.0, this.pinchStartZoom * (dist / this.pinchStartDist)))
     this.cameraZoom = newZoom
-
     const newEffScale = baseScale * newZoom
     this.camera.x = worldCX - cx / newEffScale
     this.camera.y = worldCY - cy / newEffScale
@@ -651,16 +775,27 @@ export class TongueApp {
 
     for (const [name, r] of Object.entries(this.editButtons)) {
       if (!this.hit(x, y, r)) continue
+
       if (name === 'xBtn') {
         this.loadingIsLoop = true
         this.transitionTo('LOADING')
       } else if (name === 'fwBtn') {
         this.transitionTo('VIEW_ONLY')
-      } else if (name === 'leftArrow') {
-        this.variantIndex = (this.variantIndex - 1 + NOTE_VARIANTS.length) % NOTE_VARIANTS.length
+      } else if (name === 'swapBtn') {
+        const order: ItemGroup[] = ['sticky', 'polaroid', 'blank']
+        this.itemGroup = order[(order.indexOf(this.itemGroup) + 1) % order.length]
+        this.groupVariantIdx = 0
+        this.inputEl.maxLength = this.currentCharLimit
         this.syncInputToEditText()
-      } else if (name === 'rightArrow') {
-        this.variantIndex = (this.variantIndex + 1) % NOTE_VARIANTS.length
+      } else if (name === 'uploadBtn') {
+        this.fileInputEl.click()
+      } else if (name === 'leftArrow' && this.itemGroup !== 'blank') {
+        const gv = this.groupVariants
+        this.groupVariantIdx = (this.groupVariantIdx - 1 + gv.length) % gv.length
+        this.syncInputToEditText()
+      } else if (name === 'rightArrow' && this.itemGroup !== 'blank') {
+        const gv = this.groupVariants
+        this.groupVariantIdx = (this.groupVariantIdx + 1) % gv.length
         this.syncInputToEditText()
       } else if (name === 'checkBtn') {
         this.spawnActiveNote()
@@ -669,19 +804,16 @@ export class TongueApp {
       return
     }
 
-    // Touch keyboard is handled by onTouchEndKeyboard (synchronous touchend).
-    // Desktop: keep canvas focused so window keydown captures typing.
     this.inputEl.value = this.editText
   }
 
   private syncInputToEditText() {
-    // Keep editText in sync after variant change (text stays the same)
     this.inputEl.value = this.editText
   }
 
   private spawnActiveNote() {
     const scale = getScale()
-    const variant = NOTE_VARIANTS[this.variantIndex]
+    const variant = this.currentVariant
     const screenX = Math.floor(this.canvas.width  / 2 - 24 * scale)
     const screenY = Math.floor(this.canvas.height / 2 - 24 * scale)
     this.activeNote = {
@@ -692,7 +824,11 @@ export class TongueApp {
       worldY: screenY / scale + this.camera.y,
       rotation: 0,
       zIndex: this.globalZIndex + 1,
-      screenX, screenY,
+      imageData: variant.type === 'polaroid' && this.polaroidImageData
+        ? this.polaroidImageData
+        : undefined,
+      screenX,
+      screenY,
     }
   }
 
@@ -711,7 +847,6 @@ export class TongueApp {
       const scale = getScale()
       const { screenX, screenY } = this.activeNote
       const size = 48 * scale
-      // Extra hit padding for touch — finger tip is less precise than a mouse cursor
       const pad = e.pointerType === 'touch' ? scale * 6 : 0
       if (x >= screenX - pad && x <= screenX + size + pad &&
           y >= screenY - pad && y <= screenY + size + pad) {
@@ -779,6 +914,8 @@ export class TongueApp {
         this.activeNote = null
         this.editText = ''
         this.inputEl.value = ''
+        this.polaroidImageData = ''
+        this.polaroidImage = null
         this.transitionTo('EDIT')
         return
       }
@@ -810,23 +947,33 @@ export class TongueApp {
     if (!this.activeNote) return
     this.activeNote.rotation = 0
     this.activeNote.zIndex = ++this.globalZIndex
-    this.savedNotes.push({ ...this.activeNote })
+
+    // Push locally without an id — loadNotes will preserve it until server confirms
+    const localNote: NoteData = { ...this.activeNote }
+    this.savedNotes.push(localNote)
     this.transitionTo('SAVED')
+
     try {
-      await fetch('/api/notes', {
+      const res = await fetch('/api/notes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          variant: this.activeNote.variantKey,
-          color:   this.activeNote.color,
-          text:    this.activeNote.text,
-          world_x: Math.round(this.activeNote.worldX),
-          world_y: Math.round(this.activeNote.worldY),
-          rotation: this.activeNote.rotation,
-          z_index:  this.activeNote.zIndex,
+          variant:    localNote.variantKey,
+          color:      localNote.color,
+          text:       localNote.text,
+          world_x:    Math.round(localNote.worldX),
+          world_y:    Math.round(localNote.worldY),
+          rotation:   localNote.rotation,
+          z_index:    localNote.zIndex,
+          image_data: localNote.imageData ?? null,
         }),
       })
-    } catch { /* offline — shown locally */ }
+      if (res.ok) {
+        const result = await res.json()
+        // Stamp the server-assigned id onto our local copy so loadNotes doesn't drop it
+        if (result.note?.id) localNote.id = result.note.id
+      }
+    } catch { /* offline — note stays locally */ }
   }
 
   // ─── Load notes ────────────────────────────────────────────────────────────
@@ -834,19 +981,33 @@ export class TongueApp {
     try {
       const res  = await fetch('/api/notes')
       const data = await res.json()
-      this.savedNotes = (data.notes || []).map((n: Record<string, unknown>) => ({
-        id: n.id as string,
+
+      const serverNotes: NoteData[] = (data.notes || []).map((n: Record<string, unknown>) => ({
+        id:         n.id as string,
         variantKey: n.variant as string,
-        color: n.color as 'yellow' | 'blue' | 'red',
-        text:  n.text as string,
-        worldX: n.world_x as number,
-        worldY: n.world_y as number,
-        rotation: n.rotation as number,
-        zIndex:   n.z_index as number,
+        color:      n.color as string,
+        text:       n.text  as string,
+        worldX:     n.world_x  as number,
+        worldY:     n.world_y  as number,
+        rotation:   n.rotation as number,
+        zIndex:     n.z_index  as number,
+        imageData:  (n.image_data as string) || undefined,
         screenX: 0, screenY: 0,
       }))
+
+      // Pre-warm the image cache for any polaroid photos arriving from server
+      for (const note of serverNotes) {
+        if (note.imageData) this.getCachedImage(note.imageData)
+      }
+
+      // Preserve any locally-placed notes that haven't been confirmed by the server yet
+      // (those without a real server id, or id not present in the server list)
+      const serverIdSet = new Set(serverNotes.map(n => n.id).filter(Boolean))
+      const pendingLocal = this.savedNotes.filter(n => !n.id || !serverIdSet.has(n.id))
+
+      this.savedNotes = [...serverNotes, ...pendingLocal]
       this.globalZIndex = Math.max(0, ...this.savedNotes.map(n => n.zIndex))
-    } catch { /* no backend yet */ }
+    } catch { /* no backend */ }
   }
 
   private getAllNotes(): NoteData[] {
@@ -861,16 +1022,14 @@ export class TongueApp {
       this.loadingComplete = false
       this.loadingLastTick = 0
     }
-    // Always reset zoom when leaving the wall-view/pinch context
     if (state === 'EDIT' || state === 'PLACING') {
       this.cameraZoom = 1.0
       this.pinchStartDist = 0
       this.activePointers.clear()
     }
     if (state === 'EDIT') {
+      this.inputEl.maxLength = this.currentCharLimit
       this.inputEl.value = this.editText
-      // Desktop only: focus canvas so window keydown listener captures typing.
-      // On touch, focus is handled synchronously in onTouchEndKeyboard (never async).
       if (!navigator.maxTouchPoints) {
         try { this.canvas.focus() } catch { /**/ }
       }

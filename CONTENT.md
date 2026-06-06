@@ -281,23 +281,28 @@ Activates **Supabase** when `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE
 
 **Live polling:** `window.setInterval(() => loadNotes(), 30_000)` — all users see new notes within 30s.
 
-**Supabase schema (already deployed):**
+**Supabase schema (live):**
 ```sql
 CREATE TABLE notes (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   variant     TEXT NOT NULL,
-  color       TEXT NOT NULL CHECK (color IN ('yellow','blue','red')),
-  text        TEXT NOT NULL CHECK (char_length(text) <= 24),
+  color       TEXT NOT NULL CHECK (char_length(color) <= 30),
+  text        TEXT NOT NULL CHECK (char_length(text) <= 48),
   world_x     INTEGER NOT NULL,
   world_y     INTEGER NOT NULL,
   rotation    REAL NOT NULL DEFAULT 0,
   z_index     INTEGER NOT NULL,
+  image_data  TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "anyone can read"   ON notes FOR SELECT USING (true);
 CREATE POLICY "anyone can insert" ON notes FOR INSERT WITH CHECK (true);
 ```
+
+**color values in use:** `yellow`, `blue`, `red`, `green` (sticky notes) · `p_white`, `p_peach`, `p_mint`, `p_lime`, `p_sky`, `p_rose` (polaroids) · `blank` (blank notes)
+
+**image_data:** base64 JPEG data URL, ~30–80KB, NULL for all non-polaroid notes. Stored resized to 320×240 on client before upload.
 
 **To reset the wall (delete all notes):**
 ```sql

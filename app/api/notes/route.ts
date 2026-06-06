@@ -21,16 +21,22 @@ async function getSupabase() {
 const memNotes: Record<string, unknown>[] = []
 let nextId = 1
 
-// ─── Rate limit (IP, 3 per hour) ─────────────────────────────────────────────
+// ─── Rate limit (IP, 10 per hour) ────────────────────────────────────────────
 const rateLimitMap = new Map<string, number[]>()
 
 function isRateLimited(ip: string): boolean {
   const now = Date.now()
-  const window = 60 * 60 * 1000  // 1 hour
+  const window = 60 * 60 * 1000
   const hits = (rateLimitMap.get(ip) || []).filter(t => now - t < window)
-  if (hits.length >= 3) return true
+  if (hits.length >= 10) return true
   rateLimitMap.set(ip, [...hits, now])
   return false
+}
+
+// Max text length depending on item type
+// blank notes allow 48 chars, everything else 24
+function maxTextLen(variant: string): number {
+  return variant.startsWith('blank_') ? 48 : 24
 }
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
@@ -51,35 +57,44 @@ export async function GET() {
 
 // ─── POST ─────────────────────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
-  // Rate limiting
   const hdrs = await headers()
   const ip = hdrs.get('x-forwarded-for')?.split(',')[0] ?? 'unknown'
   if (isRateLimited(ip)) {
-    return NextResponse.json({ error: 'Rate limit: max 3 notes per hour' }, { status: 429 })
+    return NextResponse.json({ error: 'Rate limit exceeded' }, { status: 429 })
   }
 
   const body = await req.json()
-  const { variant, color, text, world_x, world_y, rotation, z_index } = body
+  const { variant, color, text, world_x, world_y, rotation, z_index, image_data } = body
 
   if (!variant || !color || typeof text !== 'string') {
     return NextResponse.json({ error: 'Invalid note data' }, { status: 400 })
   }
-  if (text.length > 24) {
-    return NextResponse.json({ error: 'Text too long' }, { status: 400 })
-  }
-  const validColors = ['yellow', 'blue', 'red']
-  if (!validColors.includes(color)) {
-    return NextResponse.json({ error: 'Invalid color' }, { status: 400 })
+
+  const limit = maxTextLen(String(variant))
+  if (text.length > limit) {
+    return NextResponse.json({ error: `Text too long (max ${limit})` }, { status: 400 })
   }
 
-  const noteData = {
-    variant: String(variant).slice(0, 50),
-    color: String(color),
-    text: String(text).slice(0, 24),
-    world_x: Math.round(Number(world_x)) || 0,
-    world_y: Math.round(Number(world_y)) || 0,
-    rotation: Number(rotation) || 0,
-    z_index: Number(z_index) || 1,
+  // image_data must be a base64 data URL or absent
+  // Limit to ~200KB base64 (roughly 150KB image) to keep rows manageable
+  if (image_data !== undefined && image_data !== null) {
+    if (typeof image_data !== 'string') {
+      return NextResponse.json({ error: 'Invalid image_data' }, { status: 400 })
+    }
+    if (image_data.length > 200_000) {
+      return NextResponse.json({ error: 'Image too large' }, { status: 400 })
+    }
+  }
+
+  const noteData: Record<string, unknown> = {
+    variant:   String(variant).slice(0, 50),
+    color:     String(color).slice(0, 30),
+    text:      String(text).slice(0, limit),
+    world_x:   Math.round(Number(world_x)) || 0,
+    world_y:   Math.round(Number(world_y)) || 0,
+    rotation:  Number(rotation) || 0,
+    z_index:   Number(z_index) || 1,
+    image_data: image_data ?? null,
   }
 
   if (HAS_SUPABASE) {

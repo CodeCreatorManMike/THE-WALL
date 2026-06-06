@@ -8,12 +8,13 @@ export type AppState =
 export interface NoteData {
   id?: string
   variantKey: string
-  color: 'yellow' | 'blue' | 'red'
+  color: string
   text: string
   worldX: number
   worldY: number
   rotation: number  // degrees
   zIndex: number
+  imageData?: string  // base64 data URL — polaroid user photo (local session only)
   // runtime only
   screenX: number
   screenY: number

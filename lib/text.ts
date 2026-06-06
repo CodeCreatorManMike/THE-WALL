@@ -1,8 +1,6 @@
 import type { TextZone } from './variants'
 import { FONT_MAX, TEXT_COLORS } from './constants'
 
-// Pixel-accurate character-by-character wrapping using actual measured widths.
-// Much more accurate than estimating from a single character.
 function wrapByMeasure(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -23,9 +21,9 @@ function wrapByMeasure(
   return lines
 }
 
-// Font never shrinks. Always FONT_MAX (8px at 1x).
-// posScale: scale for zone positioning on the displayed note
-// fontScale: scale for font rendering (pass getScale() in edit preview)
+// posScale: scale for zone positioning
+// fontScale: scale for font size
+// centered: center each line within the zone (used for polaroid captions)
 export function renderNoteText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -34,7 +32,8 @@ export function renderNoteText(
   noteX: number,
   noteY: number,
   posScale: number,
-  fontScale?: number
+  fontScale?: number,
+  centered = false
 ) {
   if (!text) return
 
@@ -53,19 +52,27 @@ export function renderNoteText(
   ctx.textBaseline = 'top'
   ctx.imageSmoothingEnabled = false
 
-  // Pixel-accurate wrapping: measure each character as it's added to the line
   const lines = wrapByMeasure(ctx, text, zoneW)
   const lineH  = FONT_MAX * fs
 
-  // Clip strictly to zone — text stops at zone boundary
   ctx.beginPath()
   ctx.rect(baseX, baseY, zoneW, zoneH)
   ctx.clip()
 
-  for (let i = 0; i < lines.length; i++) {
-    const drawY = baseY + i * lineH
-    if (drawY >= maxBottom) break
-    ctx.fillText(lines[i], baseX, drawY)
+  if (centered) {
+    ctx.textAlign = 'center'
+    const centerX = baseX + zoneW / 2
+    for (let i = 0; i < lines.length; i++) {
+      const drawY = baseY + i * lineH
+      if (drawY >= maxBottom) break
+      ctx.fillText(lines[i], centerX, drawY)
+    }
+  } else {
+    for (let i = 0; i < lines.length; i++) {
+      const drawY = baseY + i * lineH
+      if (drawY >= maxBottom) break
+      ctx.fillText(lines[i], baseX, drawY)
+    }
   }
 
   ctx.restore()
