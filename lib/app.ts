@@ -84,6 +84,8 @@ export class TongueApp {
     this.resize()
     window.addEventListener('resize', this.resize)
     this.canvas.addEventListener('pointerdown', this.onPointerDown)
+    // passive:false so we can call preventDefault() inside
+    this.canvas.addEventListener('touchend', this.onTouchEndKeyboard, { passive: false })
     window.addEventListener('pointermove', this.onPointerMove)
     window.addEventListener('pointerup', this.onPointerUp)
     window.addEventListener('keydown', this.onKeyDown)
@@ -96,10 +98,11 @@ export class TongueApp {
     this.inputEl.setAttribute('autocomplete', 'off')
     this.inputEl.setAttribute('autocorrect', 'off')
     this.inputEl.setAttribute('autocapitalize', 'none')
-    // Position on-screen but invisible — iOS refuses to show keyboard for inputs
-    // that are far off-screen (top:-9999px). bottom:0 keeps it in the safe zone.
+    this.inputEl.setAttribute('spellcheck', 'false')
+    // Off-screen but NOT display:none/visibility:hidden — iOS opens keyboard for
+    // position:fixed at -9999px. font-size:16px prevents iOS viewport zoom on focus.
     this.inputEl.style.cssText = `
-      position: fixed; bottom: 0; left: 0;
+      position: fixed; top: -9999px; left: -9999px;
       opacity: 0; width: 1px; height: 1px; font-size: 16px;
       border: none; outline: none; background: transparent;
       pointer-events: none;
@@ -129,6 +132,7 @@ export class TongueApp {
     cancelAnimationFrame(this.momentumId)
     window.removeEventListener('resize', this.resize)
     this.canvas.removeEventListener('pointerdown', this.onPointerDown)
+    this.canvas.removeEventListener('touchend', this.onTouchEndKeyboard)
     window.removeEventListener('pointermove', this.onPointerMove)
     window.removeEventListener('pointerup', this.onPointerUp)
     window.removeEventListener('keydown', this.onKeyDown)
@@ -530,6 +534,24 @@ export class TongueApp {
     }
   }
 
+  // ─── Touch keyboard (iOS-safe) ─────────────────────────────────────────────
+  // iOS only opens the keyboard when .focus() is called SYNCHRONOUSLY inside a
+  // touchend handler. Using pointerdown (= touchstart) or any async path kills it.
+  private onTouchEndKeyboard = (e: TouchEvent) => {
+    if (this.state !== 'EDIT') return
+    const r = this.editTextboxRect
+    if (!r) return
+    const touch = e.changedTouches[0]
+    if (!touch) return
+    const { clientX: x, clientY: y } = touch
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
+      e.preventDefault()   // suppress 300ms ghost click
+      e.stopPropagation()
+      this.inputEl.value = this.editText
+      this.inputEl.focus() // synchronous inside touchend — keyboard opens and stays
+    }
+  }
+
   private onPointerMove = (e: PointerEvent) => {
     this.mouseX = e.clientX
     this.mouseY = e.clientY
@@ -580,16 +602,8 @@ export class TongueApp {
       return
     }
 
-    // On touch (mobile): tapping the textbox area focuses the hidden input → shows keyboard
-    // On desktop (mouse): keep canvas focused; window keydown handles typing
-    if (e.pointerType === 'touch' && this.editTextboxRect) {
-      const r = this.editTextboxRect
-      if (e.clientX >= r.x && e.clientX <= r.x + r.w &&
-          e.clientY >= r.y && e.clientY <= r.y + r.h) {
-        this.inputEl.focus()
-        return
-      }
-    }
+    // Touch keyboard is handled by onTouchEndKeyboard (synchronous touchend).
+    // Desktop: keep canvas focused so window keydown captures typing.
     this.inputEl.value = this.editText
   }
 
@@ -782,10 +796,11 @@ export class TongueApp {
     }
     if (state === 'EDIT') {
       this.inputEl.value = this.editText
-      // Focus the canvas for desktop keyboard input
-      setTimeout(() => {
+      // Desktop only: focus canvas so window keydown listener captures typing.
+      // On touch, focus is handled synchronously in onTouchEndKeyboard (never async).
+      if (!navigator.maxTouchPoints) {
         try { this.canvas.focus() } catch { /**/ }
-      }, 50)
+      }
     }
     this.state = state
   }
