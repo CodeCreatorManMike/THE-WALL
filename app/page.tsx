@@ -28,6 +28,7 @@ export default function Home() {
         height: '100vh',
         display: 'block',
         cursor: 'none',
+        touchAction: 'none',   // prevents browser from intercepting touch for scroll/zoom
       }}
     />
   )

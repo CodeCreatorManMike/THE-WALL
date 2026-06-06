@@ -95,10 +95,13 @@ export class TongueApp {
     this.inputEl.setAttribute('autocomplete', 'off')
     this.inputEl.setAttribute('autocorrect', 'off')
     this.inputEl.setAttribute('autocapitalize', 'none')
+    // Position on-screen but invisible — iOS refuses to show keyboard for inputs
+    // that are far off-screen (top:-9999px). bottom:0 keeps it in the safe zone.
     this.inputEl.style.cssText = `
-      position: fixed; top: -9999px; left: -9999px;
+      position: fixed; bottom: 0; left: 0;
       opacity: 0; width: 1px; height: 1px; font-size: 16px;
       border: none; outline: none; background: transparent;
+      pointer-events: none;
     `
     document.body.appendChild(this.inputEl)
     this.inputEl.addEventListener('input', this.onNativeInput)
@@ -507,7 +510,8 @@ export class TongueApp {
     if (this.state === 'LOADING') {
       this.handleLoadingClick(e)
     } else if (this.state === 'EDIT') {
-      this.canvas.focus()        // ensure canvas has keyboard focus after click
+      // Touch: don't focus canvas — it steals focus from inputEl and dismisses keyboard
+      if (e.pointerType !== 'touch') this.canvas.focus()
       this.handleEditClick(e)
     } else if (this.state === 'PLACING') {
       this.isGripping = true
@@ -621,9 +625,15 @@ export class TongueApp {
       const scale = getScale()
       const { screenX, screenY } = this.activeNote
       const size = 48 * scale
-      if (x >= screenX && x <= screenX+size && y >= screenY && y <= screenY+size) {
+      // Extra hit padding for touch — finger tip is less precise than a mouse cursor
+      const pad = e.pointerType === 'touch' ? scale * 6 : 0
+      if (x >= screenX - pad && x <= screenX + size + pad &&
+          y >= screenY - pad && y <= screenY + size + pad) {
         this.isDraggingNote = true
-        this.noteDragOffset = { x: x-screenX, y: y-screenY }
+        this.noteDragOffset = {
+          x: Math.max(0, Math.min(size, x - screenX)),
+          y: Math.max(0, Math.min(size, y - screenY)),
+        }
         return
       }
     }
