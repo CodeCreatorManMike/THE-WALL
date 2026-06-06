@@ -1,18 +1,5 @@
 import type { TextZone } from './variants'
-import { FONT_MAX, FONT_MIN, TEXT_COLORS } from './constants'
-
-export function calcFontSize(text: string, zone: TextZone): number {
-  let size = FONT_MAX
-  while (size >= FONT_MIN) {
-    const charW = Math.ceil(size * 0.6) + 1
-    const lineH = size + 2
-    const perLine = Math.floor(zone.w / charW)
-    const maxLines = Math.floor(zone.h / lineH)
-    if (text.length <= perLine * maxLines) return size
-    size--
-  }
-  return FONT_MIN
-}
+import { FONT_MAX, TEXT_COLORS } from './constants'
 
 export function wrapText(text: string, perLine: number): string[] {
   const lines: string[] = []
@@ -29,10 +16,10 @@ export function wrapText(text: string, perLine: number): string[] {
   return lines
 }
 
-// posScale: used for zone coordinates (where text zone sits on the note sprite)
-// fontScale: used for font size rendering (defaults to posScale)
-// This lets edit preview position text correctly on a large note while keeping
-// font at pixel-art size (getScale()), avoiding blown-up text
+// Font NEVER shrinks. Always FONT_MAX (8px at 1x).
+// Text fills the zone at fixed size and simply STOPS when the zone is full.
+// posScale: scale for zone coordinates on the displayed note
+// fontScale: scale for font size (defaults to posScale; pass getScale() for edit preview)
 export function renderNoteText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -44,20 +31,22 @@ export function renderNoteText(
   fontScale?: number
 ) {
   if (!text) return
-  const fs = fontScale ?? posScale
-  const fontSize = calcFontSize(text, zone) * fs
 
-  // Zone positioning uses posScale (correct for the displayed note size)
-  const baseX = noteX + zone.x * posScale
-  const baseY = noteY + zone.y * posScale
-  const zoneW = zone.w * posScale
-  const zoneH = zone.h * posScale
+  const fs = fontScale ?? posScale
+  const fontSize = FONT_MAX * fs   // FIXED — never shrinks
+
+  // Zone positioned using posScale (correct relative to displayed note size)
+  const baseX    = noteX + zone.x * posScale
+  const baseY    = noteY + zone.y * posScale
+  const zoneW    = zone.w * posScale
+  const zoneH    = zone.h * posScale
   const maxBottom = baseY + zoneH
 
-  // Wrap based on zone width at posScale, with font at fs
-  const charW = (Math.ceil((fontSize / fs) * 0.6) + 1) * fs
-  const lineH = (fontSize / fs + 2) * fs
+  // Character metrics at the fixed font size
+  const charW  = (Math.ceil(FONT_MAX * 0.6) + 1) * fs
+  const lineH  = (FONT_MAX + 2) * fs
   const perLine = Math.max(1, Math.floor(zoneW / charW))
+
   const lines = wrapText(text, perLine)
 
   ctx.save()
@@ -66,12 +55,16 @@ export function renderNoteText(
   ctx.textBaseline = 'top'
   ctx.imageSmoothingEnabled = false
 
-  lines.forEach((line, i) => {
+  // Clip strictly to zone — text stops at the zone border, never overflows
+  ctx.beginPath()
+  ctx.rect(baseX, baseY, zoneW, zoneH)
+  ctx.clip()
+
+  for (let i = 0; i < lines.length; i++) {
     const drawY = baseY + i * lineH
-    if (drawY + fontSize <= maxBottom) {
-      ctx.fillText(line, baseX, drawY)
-    }
-  })
+    if (drawY >= maxBottom) break          // stop — zone is full vertically
+    ctx.fillText(lines[i], baseX, drawY)
+  }
 
   ctx.restore()
 }
