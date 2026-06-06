@@ -77,6 +77,10 @@ export class TongueApp {
 
   // ─── Start ─────────────────────────────────────────────────────────────────
   async start() {
+    // Make canvas focusable so keyboard events reach it directly
+    this.canvas.setAttribute('tabindex', '0')
+    this.canvas.style.outline = 'none'
+
     this.resize()
     window.addEventListener('resize', this.resize)
     this.canvas.addEventListener('pointerdown', this.onPointerDown)
@@ -84,7 +88,7 @@ export class TongueApp {
     window.addEventListener('pointerup', this.onPointerUp)
     window.addEventListener('keydown', this.onKeyDown)
 
-    // Hidden input for keyboard/mobile text entry
+    // Hidden input — only used for mobile virtual keyboard triggering
     this.inputEl = document.createElement('input')
     this.inputEl.type = 'text'
     this.inputEl.maxLength = CHAR_LIMIT
@@ -105,6 +109,9 @@ export class TongueApp {
 
     this.camera.x = WORLD_SIZE / 2 - CANVAS_W / 2
     this.camera.y = WORLD_SIZE / 2 - CANVAS_H / 2
+
+    // Focus canvas immediately so keyboard input works from the start
+    try { this.canvas.focus() } catch { /**/ }
 
     this.loadNotes()
     this.rafId = requestAnimationFrame(this.loop)
@@ -490,20 +497,22 @@ export class TongueApp {
     this.editText = this.inputEl.value.slice(0, CHAR_LIMIT)
   }
 
-  // Desktop keyboard fallback — works even if hidden input focus fails
   private onKeyDown = (e: KeyboardEvent) => {
     if (this.state !== 'EDIT') return
+    // Skip if the hidden input is focused (mobile path — onNativeInput handles it)
+    if (document.activeElement === this.inputEl) return
     if (e.key === 'Backspace') {
+      e.preventDefault()
       this.editText = this.editText.slice(0, -1)
     } else if (e.key.length === 1 && this.editText.length < CHAR_LIMIT) {
       this.editText += e.key
     }
-    // Keep hidden input in sync
     this.inputEl.value = this.editText
   }
 
   private onPointerDown = (e: PointerEvent) => {
-    e.preventDefault()
+    // Don't preventDefault in EDIT state — allows normal focus transfer to canvas
+    if (this.state !== 'EDIT') e.preventDefault()
     this.mouseX = e.clientX
     this.mouseY = e.clientY
     try { this.canvas.setPointerCapture(e.pointerId) } catch { /**/ }
@@ -511,6 +520,7 @@ export class TongueApp {
     if (this.state === 'LOADING') {
       this.handleLoadingClick(e)
     } else if (this.state === 'EDIT') {
+      this.canvas.focus()        // ensure canvas has keyboard focus after click
       this.handleEditClick(e)
     } else if (this.state === 'PLACING') {
       this.isGripping = true
@@ -762,8 +772,10 @@ export class TongueApp {
     }
     if (state === 'EDIT') {
       this.inputEl.value = this.editText
-      // Small delay then focus so iOS keyboard opens
-      setTimeout(() => { try { this.inputEl.focus() } catch { /**/ } }, 100)
+      // Focus the canvas for desktop keyboard input
+      setTimeout(() => {
+        try { this.canvas.focus() } catch { /**/ }
+      }, 50)
     }
     this.state = state
   }
