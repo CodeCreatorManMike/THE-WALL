@@ -58,6 +58,12 @@ export class TongueApp {
   private lastMovePos = { x: 0, y: 0 }
   private momentumId = 0
 
+  // Pinch-to-zoom (VIEW_ONLY / SAVED states only)
+  private cameraZoom = 1.0
+  private activePointers = new Map<number, { x: number; y: number }>()
+  private pinchStartDist = 0
+  private pinchStartZoom = 1.0
+
   // Cursor
   private mouseX = 0
   private mouseY = 0
@@ -389,7 +395,8 @@ export class TongueApp {
   // ─── WALL (PLACING / SAVED / VIEW_ONLY) ───────────────────────────────────
   private renderWall(_now: number) {
     const ctx = this.ctx
-    const scale = getScale()
+    // cameraZoom = 1.0 in PLACING/EDIT (reset on transition), >1 or <1 when pinching
+    const scale = getScale() * this.cameraZoom
     const w = this.canvas.width
     const h = this.canvas.height
 
@@ -526,7 +533,19 @@ export class TongueApp {
     this.mouseX = e.clientX
     this.mouseY = e.clientY
     if (e.pointerType === 'touch') this.isTouch = true
+    this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
     try { this.canvas.setPointerCapture(e.pointerId) } catch { /**/ }
+
+    // Two fingers in zoomable states → start pinch, cancel any wall pan
+    const zoomable = this.state === 'VIEW_ONLY' || this.state === 'SAVED'
+    if (this.activePointers.size === 2 && zoomable) {
+      this.isDraggingWall = false
+      cancelAnimationFrame(this.momentumId)
+      const pts = [...this.activePointers.values()]
+      this.pinchStartDist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+      this.pinchStartZoom = this.cameraZoom
+      return
+    }
 
     if (this.state === 'LOADING') {
       this.handleLoadingClick(e)
@@ -567,16 +586,52 @@ export class TongueApp {
   private onPointerMove = (e: PointerEvent) => {
     this.mouseX = e.clientX
     this.mouseY = e.clientY
+    this.activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+    // Two-finger pinch in progress
+    if (this.activePointers.size === 2 && this.pinchStartDist > 0 &&
+        (this.state === 'VIEW_ONLY' || this.state === 'SAVED')) {
+      this.handlePinchMove()
+      return
+    }
+
     if (this.state === 'PLACING') this.handlePlacingMove(e)
     else if (this.isDraggingWall) this.continuePan(e)
   }
 
-  private onPointerUp = (_e: PointerEvent) => {
+  private onPointerUp = (e: PointerEvent) => {
+    this.activePointers.delete(e.pointerId)
+    if (this.activePointers.size < 2) this.pinchStartDist = 0
     this.isGripping = false
     this.isDraggingNote = false
     const was = this.isDraggingWall
     this.isDraggingWall = false
     if (was) this.applyMomentum()
+  }
+
+  // ─── Pinch-to-zoom ─────────────────────────────────────────────────────────
+  private handlePinchMove() {
+    if (this.pinchStartDist === 0) return
+    const pts = [...this.activePointers.values()]
+    const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y)
+    const cx   = (pts[0].x + pts[1].x) / 2
+    const cy   = (pts[0].y + pts[1].y) / 2
+
+    const baseScale   = getScale()
+    const oldEffScale = baseScale * this.cameraZoom
+
+    // Keep the world point under the pinch centre fixed as zoom changes
+    const worldCX = cx / oldEffScale + this.camera.x
+    const worldCY = cy / oldEffScale + this.camera.y
+
+    const newZoom = Math.max(0.25, Math.min(4.0,
+      this.pinchStartZoom * (dist / this.pinchStartDist)
+    ))
+    this.cameraZoom = newZoom
+
+    const newEffScale = baseScale * newZoom
+    this.camera.x = worldCX - cx / newEffScale
+    this.camera.y = worldCY - cy / newEffScale
   }
 
   // ─── Loading click ─────────────────────────────────────────────────────────
@@ -805,6 +860,12 @@ export class TongueApp {
       this.loadingFrame = 0
       this.loadingComplete = false
       this.loadingLastTick = 0
+    }
+    // Always reset zoom when leaving the wall-view/pinch context
+    if (state === 'EDIT' || state === 'PLACING') {
+      this.cameraZoom = 1.0
+      this.pinchStartDist = 0
+      this.activePointers.clear()
     }
     if (state === 'EDIT') {
       this.inputEl.value = this.editText
