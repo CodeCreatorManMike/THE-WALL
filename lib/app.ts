@@ -62,6 +62,7 @@ export class TongueApp {
   private mouseX = 0
   private mouseY = 0
   private isGripping = false
+  private isTouch = false
 
   // Button hit areas
   private editButtons: Record<string, {x:number;y:number;w:number;h:number}> = {}
@@ -461,7 +462,10 @@ export class TongueApp {
     const img = this.isGripping ? this.assets.ui.handGripping : this.assets.ui.handIdle
     if (!img) return
     const cw = 24 * scale, ch = 24 * scale
-    ctx.drawImage(img, this.mouseX - 8 * scale, this.mouseY - 4 * scale, cw, ch)
+    // Touch: raise the sprite so the visual fingertip aligns with the tap point.
+    // Desktop hotspot (8,4) is for the CSS cursor; on touch the sprite sits too low.
+    const hotY = this.isTouch ? 12 * scale : 4 * scale
+    ctx.drawImage(img, this.mouseX - 8 * scale, this.mouseY - hotY, cw, ch)
   }
 
   // ─── Hit test ──────────────────────────────────────────────────────────────
@@ -505,6 +509,7 @@ export class TongueApp {
     if (this.state !== 'EDIT') e.preventDefault()
     this.mouseX = e.clientX
     this.mouseY = e.clientY
+    if (e.pointerType === 'touch') this.isTouch = true
     try { this.canvas.setPointerCapture(e.pointerId) } catch { /**/ }
 
     if (this.state === 'LOADING') {
