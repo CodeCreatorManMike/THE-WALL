@@ -502,10 +502,7 @@ export class TongueApp {
     // On touch devices every keystroke is already handled by onNativeInput
     // via the 'input' event on the hidden field. Skip here to prevent doubling.
     // document.activeElement is unreliable on iOS Safari so use isTouch instead.
-    if (this.isTouch) {
-      if (e.key === 'Backspace') e.preventDefault()
-      return
-    }
+    if (this.isTouch) return  // onNativeInput handles all input including Backspace
     if (e.key === 'Backspace') {
       e.preventDefault()
       this.editText = this.editText.slice(0, -1)
