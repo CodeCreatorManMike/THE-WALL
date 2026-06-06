@@ -251,11 +251,14 @@ export class TongueApp {
     if (sprite) ctx.drawImage(sprite, noteX, noteY, noteW, noteH)
     renderNoteText(ctx, this.editText, variant.color, variant.zone, noteX, noteY, noteScale, getScale())
 
-    // ── Textbox widget (right side) ───────────────────────────────────────────
+    // ── Textbox widget (right side, centered in remaining space) ─────────────
     const tbScale = noteDisplayPx / 96
     const tbW = Math.floor(109 * tbScale)
     const tbH = Math.floor(96  * tbScale)
-    const tbX = noteX + noteW + Math.floor(w * 0.06)
+    // Center the textbox in the space to the right of the note
+    const rightAreaStart = noteX + noteW
+    const rightAreaWidth = w - rightAreaStart
+    const tbX = rightAreaStart + Math.floor((rightAreaWidth - tbW) / 2)
     const tbY = Math.floor(h / 2 - tbH / 2)
 
     if (this.assets.ui.textbox) ctx.drawImage(this.assets.ui.textbox, tbX, tbY, tbW, tbH)
@@ -305,13 +308,18 @@ export class TongueApp {
     //   rows 30-77 = white body, ruled lines at 1x rows: 38,45,51,57,63,69
     const textStartX = tbX + Math.floor((14/109) * tbW)
     const textWidth  = Math.floor((82/109) * tbW)
-    const firstLineY = tbY + Math.floor((32/96) * tbH)
-    const lineH      = Math.max(1, Math.floor((6.5/96) * tbH))
+    const firstLineY = tbY + Math.floor((32/96) * tbH)      // start height unchanged
+    const lineH      = Math.max(1, Math.floor((8.5/96) * tbH))  // slightly more spacing
     const bodyBottom = tbY + Math.floor((77/96) * tbH)
 
     const fontSize = Math.max(5, lineH - 2)
-    const charW = Math.ceil(fontSize * 0.6) + 1
-    const perLine = Math.max(1, Math.floor(textWidth / charW))
+
+    // Set font before measuring for accurate char width
+    ctx.save()
+    ctx.font = `${fontSize}px minecraft`
+    ctx.imageSmoothingEnabled = false
+    const actualCharW = ctx.measureText('M').width || Math.ceil(fontSize * 0.5)
+    const perLine = Math.max(1, Math.floor(textWidth / actualCharW))
 
     const lines: string[] = []
     let cur = ''
@@ -321,11 +329,8 @@ export class TongueApp {
     }
     if (cur) lines.push(cur)
 
-    ctx.save()
-    ctx.font = `${fontSize}px minecraft`
     ctx.fillStyle = '#1a1008'
     ctx.textBaseline = 'top'
-    ctx.imageSmoothingEnabled = false
     ctx.beginPath()
     ctx.rect(textStartX, firstLineY, textWidth, bodyBottom - firstLineY)
     ctx.clip()
@@ -338,7 +343,7 @@ export class TongueApp {
     if (this.cursorVisible) {
       const lastIdx = Math.min(lines.length - 1, 5)
       const lastLine = lines[lastIdx] || ''
-      const cx = textStartX + lastLine.length * charW
+      const cx = textStartX + lastLine.length * actualCharW
       const cy = firstLineY + lastIdx * lineH
       ctx.fillRect(cx, cy, Math.max(1, Math.ceil(tbW/109)), fontSize)
     }
