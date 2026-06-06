@@ -37,6 +37,7 @@ export class TongueApp {
 
   // Edit
   private variantIndex = 0
+  private editTextboxRect: { x: number; y: number; w: number; h: number } | null = null
   private editText = ''
   private cursorVisible = true
   private cursorLastBlink = 0
@@ -183,10 +184,14 @@ export class TongueApp {
         this.mikeyFrameLoad = (this.mikeyFrameLoad + 1) % mikey.length
       }
       const mFrame = mikey[this.mikeyFrameLoad]
-      const mScale = Math.max(3, Math.floor(Math.min(w, h) * 0.003))
+      // Cap to 80% of screen width so mini mike never overflows on narrow screens
+      const mScale = Math.max(1, Math.min(
+        Math.max(3, Math.floor(Math.min(w, h) * 0.003)),
+        Math.floor(w * 0.80 / mFrame.naturalWidth)
+      ))
       const mw = mFrame.naturalWidth  * mScale
       const mh = mFrame.naturalHeight * mScale
-      ctx.drawImage(mFrame, Math.floor(w / 2 - mw / 2), Math.floor(h * 0.25 - mh / 2), mw, mh)
+      ctx.drawImage(mFrame, Math.floor(w / 2 - mw / 2), Math.floor(h * 0.28 - mh / 2), mw, mh)
     }
 
     // ── Loading bar frames ──
@@ -205,10 +210,12 @@ export class TongueApp {
         }
       }
       const frame = frames[this.loadingFrame]
-      const barScale = Math.max(scale * 2, 4)
+      // Cap bar to 80% of screen width — prevents overflow on phones
+      const maxBarScale = Math.max(2, Math.floor(w * 0.80 / frame.naturalWidth))
+      const barScale = Math.min(Math.max(scale * 2, 4), maxBarScale)
       const fw = frame.naturalWidth  * barScale
       const fh = frame.naturalHeight * barScale
-      ctx.drawImage(frame, Math.floor(w/2 - fw/2), Math.floor(h * 0.65 - fh/2), fw, fh)
+      ctx.drawImage(frame, Math.floor(w/2 - fw/2), Math.floor(h * 0.62 - fh/2), fw, fh)
     }
 
     // In loop mode: show → top-right to return to EDIT
@@ -234,14 +241,20 @@ export class TongueApp {
 
     const variant = NOTE_VARIANTS[this.variantIndex]
 
-    // ── Note preview (large, left side) ──────────────────────────────────────
+    // ── Note preview + textbox: centered as a single block ───────────────────
     const noteDisplayPx = Math.min(Math.floor(Math.min(w, h) * 0.38), 320)
     const noteW = noteDisplayPx
     const noteH = noteDisplayPx
     const noteScale = noteDisplayPx / 48
 
-    const noteX = Math.floor(w * 0.08)
-    const noteY = Math.floor(h / 2 - noteH / 2)
+    const tbScale = noteDisplayPx / 96
+    const tbW = Math.floor(109 * tbScale)
+    const tbH = Math.floor(96  * tbScale)
+
+    const gap    = Math.max(16, Math.floor(w * 0.025))
+    const totalW = noteW + gap + tbW
+    const noteX  = Math.max(Math.floor(w * 0.02), Math.floor((w - totalW) / 2))
+    const noteY  = Math.floor(h / 2 - noteH / 2)
 
     // Shadow on note — wall shadow colour on wall background
     const mask = this.assets.shadowMasks[variant.key]
@@ -260,15 +273,12 @@ export class TongueApp {
     if (sprite) ctx.drawImage(sprite, noteX, noteY, noteW, noteH)
     renderNoteText(ctx, this.editText, variant.color, variant.zone, noteX, noteY, noteScale, getScale())
 
-    // ── Textbox widget (right side, centered in remaining space) ─────────────
-    const tbScale = noteDisplayPx / 96
-    const tbW = Math.floor(109 * tbScale)
-    const tbH = Math.floor(96  * tbScale)
-    // Center the textbox in the space to the right of the note
-    const rightAreaStart = noteX + noteW
-    const rightAreaWidth = w - rightAreaStart
-    const tbX = rightAreaStart + Math.floor((rightAreaWidth - tbW) / 2)
+    // ── Textbox widget (fixed gap to the right of the note) ──────────────────
+    const tbX = noteX + noteW + gap
     const tbY = Math.floor(h / 2 - tbH / 2)
+
+    // Track bounds so mobile tap can focus the hidden input for the keyboard
+    this.editTextboxRect = { x: tbX, y: tbY, w: tbW, h: tbH }
 
     if (this.assets.ui.textbox) ctx.drawImage(this.assets.ui.textbox, tbX, tbY, tbW, tbH)
     this.renderTextboxText(ctx, tbX, tbY, tbW, tbH)
@@ -561,9 +571,17 @@ export class TongueApp {
       return
     }
 
-    // Clicking anywhere else — canvas stays focused (keyboard events come via window listener)
+    // On touch (mobile): tapping the textbox area focuses the hidden input → shows keyboard
+    // On desktop (mouse): keep canvas focused; window keydown handles typing
+    if (e.pointerType === 'touch' && this.editTextboxRect) {
+      const r = this.editTextboxRect
+      if (e.clientX >= r.x && e.clientX <= r.x + r.w &&
+          e.clientY >= r.y && e.clientY <= r.y + r.h) {
+        this.inputEl.focus()
+        return
+      }
+    }
     this.inputEl.value = this.editText
-    // Do NOT focus inputEl — that would block the window keydown handler
   }
 
   private syncInputToEditText() {
